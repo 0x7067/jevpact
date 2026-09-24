@@ -62,18 +62,48 @@ async function bootout(label) {
 }
 
 async function bootstrap(label) {
-  await exec('/bin/launchctl', ['bootstrap', domain(), agentPath(label)], { timeout: 10000 });
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      await exec('/bin/launchctl', ['bootstrap', domain(), agentPath(label)], { timeout: 10000 });
+      return;
+    } catch (error) {
+      if (await loaded(label)) return;
+      if (attempt === 5) throw error;
+      // launchd can briefly reject a re-bootstrap after bootout of the same label.
+      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
 }
 
 async function waitForVersion(version) {
+  let lastResponse = 'none';
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
       const status = await call({ method: 'status' }, { timeout: 2500 });
+      lastResponse = `${status.runtime?.version ?? 'unknown'}; restoring ${status.restoring ?? 'unknown'}`;
       if (status.runtime?.version === version && status.restoring === 0) return status;
     } catch { /* Startup is still in progress. */ }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  throw new Error(`Jevpact ${version} did not start and restore its tasks`);
+  throw new Error(`Jevpact ${version} did not start and restore its tasks (last response: ${lastResponse})`);
+}
+
+async function waitForControllerStop(previousPid) {
+  for (let attempt = 0; attempt < 120; attempt++) {
+    let responsive = true;
+    try { await call({ method: 'status' }, { timeout: 300 }); }
+    catch (error) {
+      if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) responsive = false;
+    }
+    let previousProcessAlive = false;
+    if (Number.isSafeInteger(previousPid) && previousPid > 0) {
+      try { process.kill(previousPid, 0); previousProcessAlive = true; }
+      catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+    if (!responsive && !previousProcessAlive) return;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error('The previous Jevpact controller did not stop');
 }
 
 async function findNode() {
@@ -148,6 +178,9 @@ export async function installService({ sourceRoot, expectedThreads, nodePath } =
   const health = servicePlist({ label: serviceLabels.health,
     args: [node, probePath(), '--plugin', runtimeRoot, ...ids.flatMap(id => ['--expect-thread', id])], interval: 60,
     errorPath: path.join(directory, 'health.stderr.log') });
+  let previousPid = null;
+  try { previousPid = (await call({ method: 'status' }, { timeout: 1000 })).pid; }
+  catch { /* No responding controller before installation. */ }
 
   if (freshKey) await storeKey(freshKey);
   await writePrivate(probePath(), sourceProbe);
@@ -155,6 +188,7 @@ export async function installService({ sourceRoot, expectedThreads, nodePath } =
   await bootout(serviceLabels.controller);
   try {
     try { await call({ method: 'stop' }); } catch { /* No remaining manual controller. */ }
+    await waitForControllerStop(previousPid);
     await writePrivate(agentPath(serviceLabels.controller), controller);
     await writePrivate(agentPath(serviceLabels.health), health);
     await bootstrap(serviceLabels.controller);
