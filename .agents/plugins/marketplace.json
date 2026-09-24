@@ -1,0 +1,20 @@
+{
+  "name": "jevpact",
+  "interface": {
+    "displayName": "Jevpact"
+  },
+  "plugins": [
+    {
+      "name": "jevpact",
+      "source": {
+        "source": "local",
+        "path": "./plugins/jevpact"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

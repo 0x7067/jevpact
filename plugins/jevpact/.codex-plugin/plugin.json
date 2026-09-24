@@ -1,0 +1,41 @@
+{
+  "name": "jevpact",
+  "version": "0.1.0-dev.1+codex.20260924121239",
+  "description": "Compact Codex at useful work transitions, then continue safely.",
+  "author": {
+    "name": "Slopware Engineer",
+    "url": "https://x.com/aienginerd"
+  },
+  "homepage": "https://x.com/aienginerd",
+  "repository": "https://github.com/transcendr/jevpact",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "compaction",
+    "context",
+    "automation",
+    "lifecycle-hooks",
+    "jev"
+  ],
+  "interface": {
+    "displayName": "Jevpact",
+    "shortDescription": "Compact Codex at useful work transitions.",
+    "longDescription": "A local macOS Codex plugin that uses lifecycle hooks and Jev judgments to compact at useful work transitions, observes native completion, and continues actionable work.",
+    "developerName": "Slopware Engineer",
+    "category": "Productivity",
+    "capabilities": [
+      "Lifecycle Hooks",
+      "Native Compaction",
+      "Local Diagnostics"
+    ],
+    "websiteURL": "https://x.com/aienginerd",
+    "privacyPolicyURL": "https://github.com/transcendr/jevpact/blob/main/plugins/jevpact/docs/privacy.md",
+    "brandColor": "#0A1528",
+    "composerIcon": "./assets/jevpact-icon.png",
+    "logo": "./assets/jevpact-icon.png",
+    "defaultPrompt": [
+      "Explain how to install and verify Jevpact's local controller.",
+      "Inspect whether Jevpact is supervising this task and why it last waited or compacted."
+    ]
+  }
+}

@@ -1,0 +1,262 @@
+import net from 'node:net';
+import { chmod, lstat, unlink, readFile, writeFile, rename } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Transcript } from './transcript.js';
+import { Codex } from './codex.js';
+import { evaluate } from './jev.js';
+import { decide } from './policy.js';
+import { Controller, PAUSE_PREFIX, RESUME_PREFIX } from './controller.js';
+import { ensureRuntime, ensureState, socketPath, historyDir } from './paths.js';
+import { History } from './history.js';
+import { call } from './rpc.js';
+import { resolveKey } from './credentials.js';
+
+export async function serve({ apiKey, config = {}, onlyThreads = [], idleMs = 0, transport, onDecision, decisionPolicy = decide } = {}) {
+  apiKey ||= await resolveKey();
+  if (!apiKey) throw Object.assign(new Error('Set JEV_TEST_KEY or JEV_API_KEY before starting Jevpact'), { code: 'missing-key' });
+  const directory = await ensureRuntime();
+  try { await call({ method: 'status' }); return { alreadyRunning: true }; }
+  catch (e) { if (!['ENOENT', 'ECONNREFUSED'].includes(e.code)) throw e; }
+  try {
+    const info = await lstat(socketPath());
+    if (!info.isSocket() || (process.getuid && info.uid !== process.getuid())) throw new Error('Unsafe socket');
+    await unlink(socketPath());
+  } catch (e) { if (e.code !== 'ENOENT') throw e; }
+
+  const codex = transport ?? new Codex();
+  const runtime = { root: fileURLToPath(new URL('../', import.meta.url)),
+    version: JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8')).version };
+  const historyOptions = { directory: config.historyDirectory ?? (onlyThreads.length ? path.join(directory, 'history') : historyDir()),
+    retentionDays: config.historyRetentionDays ?? 30, maxBytes: config.historyMaxBytes ?? 5_000_000_000 };
+  let history = null;
+  let historyFailure = null;
+  let historyExpiry;
+  const historyError = error => { historyFailure = { at: new Date().toISOString(), reason: error.code ?? error.name ?? 'Error' }; };
+  try { history = new History(historyOptions); } catch (error) { historyError(error); }
+  const scheduleExpiry = () => {
+    if (!history || historyExpiry) return;
+    const { oldestAt } = history.stats();
+    if (oldestAt == null) return;
+    // Wake at expiry, not on a polling cadence. Node's timer maximum is 2^31-1.
+    const delay = Math.min(2 ** 31 - 1, Math.max(1, oldestAt + historyOptions.retentionDays * 86400000 - Date.now() + 1));
+    historyExpiry = setTimeout(() => {
+      historyExpiry = null;
+      try { history.prune(); scheduleExpiry(); } catch (error) { historyError(error); }
+    }, delay);
+    historyExpiry.unref();
+  };
+  try { scheduleExpiry(); } catch (error) { historyError(error); }
+  const retain = (id, event) => {
+    if (!history) return;
+    try {
+      // Optional diagnostic metadata follows JSON's usual omission semantics.
+      // Request/response bodies themselves have already been serialized by Jev.
+      history.append(id, JSON.parse(JSON.stringify({ ...event, runtimeVersion: runtime.version })));
+      scheduleExpiry();
+    }
+    catch (error) { historyError(error); }
+  };
+  const threads = new Map();
+  const attaching = new Map();
+  const remember = onlyThreads.length === 0;
+  const watchListPath = path.join(remember ? await ensureState() : directory, 'watched-threads.json');
+  const legacyWatchListPath = path.join(directory, 'watched-threads.json');
+  let remembered = new Set();
+  let migratedWatchList = false;
+  if (remember) {
+    try {
+      let contents;
+      try { contents = await readFile(watchListPath, 'utf8'); }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        contents = await readFile(legacyWatchListPath, 'utf8');
+        migratedWatchList = true;
+      }
+      const ids = JSON.parse(contents);
+      if (!Array.isArray(ids) || ids.some(id => !/^[0-9a-f-]{36}$/.test(id))) throw new Error('Invalid remembered task list');
+      remembered = new Set(ids);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  let registryWrite = Promise.resolve();
+  let restoringCount = remembered.size;
+  const saveWatchList = () => {
+    if (!remember) return Promise.resolve();
+    registryWrite = registryWrite.catch(() => {}).then(async () => {
+      const temporary = `${watchListPath}.${process.pid}.tmp`;
+      await writeFile(temporary, JSON.stringify([...remembered]) + '\n', { mode: 0o600 });
+      await rename(temporary, watchListPath);
+    });
+    return registryWrite;
+  };
+  if (migratedWatchList) await saveWatchList();
+  let lastAttachmentFailure = null;
+  let closing = false;
+  let timer;
+  // Production stays available until explicitly stopped. Only an explicitly
+  // bounded experiment may request an idle shutdown.
+  const touch = () => { if (!closing && idleMs > 0) { clearTimeout(timer); timer = setTimeout(() => close(), idleMs); } };
+  const closeThread = async id => {
+    const attempt = attaching.get(id);
+    if (attempt) attempt.cancelled = true;
+    const entry = threads.get(id);
+    if (!entry) return;
+    retain(id, { time: Date.now(), event: 'detached', reason: closing ? 'controller-stopped' : 'session-ended-or-replaced' });
+    threads.delete(id);
+    entry.controller.close();
+    codex.unbindReader(id, entry.reader);
+    await entry.reader.close();
+  };
+  const attach = async (id, requestedPath) => {
+    if (closing) return null;
+    if (threads.has(id)) return threads.get(id);
+    if (attaching.has(id)) return attaching.get(id).promise;
+    if (onlyThreads.length && !onlyThreads.includes(id)) return null;
+    const attempt = { cancelled: false, promise: null, path: requestedPath ?? null };
+    attempt.promise = (async () => {
+      let reader;
+      let published = false;
+      try {
+        const state = await codex.locate(id);
+        if (closing || attempt.cancelled) return null;
+        if (!state.rolloutPath) throw Object.assign(new Error('Transcript unavailable'), { code: 'transcript-unavailable' });
+        if (requestedPath && requestedPath !== state.rolloutPath) throw Object.assign(new Error('Transcript identity mismatch'), { code: 'transcript-identity-mismatch' });
+        attempt.path = state.rolloutPath;
+        reader = new Transcript({ sessionId: id, controlPrefixes: [PAUSE_PREFIX, RESUME_PREFIX], allowHookFallback: true });
+        await reader.open(state.rolloutPath);
+        if (closing || attempt.cancelled) return null;
+        if (!reader.snapshot().supported) throw Object.assign(new Error('Unsupported transcript'), { code: reader.snapshot().disabledReason });
+        codex.bindReader(id, reader);
+        const controller = new Controller({ reader, codex, config,
+          evaluate: (packet, { signal, purpose, onRequest }) => evaluate(packet, { apiKey, signal, purpose, onRequest }), decide: decisionPolicy });
+        controller.on('diagnostic', event => retain(id, event));
+        if (onDecision) controller.on('decision', decision => onDecision(id, decision));
+        const entry = { id, reader, controller, hookCounts: {}, lastHook: null };
+        threads.set(id, entry);
+        retain(id, { time: Date.now(), event: 'attached', rolloutPath: state.rolloutPath,
+          config, scope: onlyThreads.length ? 'scoped' : 'global' });
+        if (lastAttachmentFailure?.threadId === id) lastAttachmentFailure = null;
+        published = true;
+        reader.on('change', touch);
+        if (remember && !remembered.has(id)) {
+          remembered.add(id);
+          await saveWatchList();
+          if (closing || attempt.cancelled) return null;
+        }
+        controller.wake();
+        return entry;
+      } catch (error) {
+        if (closing || attempt.cancelled) return null;
+        // Hooks return immediately; retain the cause of an asynchronous refusal
+        // so an empty attachment list cannot silently hide failed supervision.
+        lastAttachmentFailure = { threadId: id, reason: error.code ?? error.name ?? 'Error', at: new Date().toISOString() };
+        retain(id, { time: Date.now(), event: 'attachment-failed', reason: lastAttachmentFailure.reason });
+        throw error;
+      } finally {
+        if (reader && !published) {
+          codex.unbindReader(id, reader);
+          await reader.close();
+        }
+      }
+    })();
+    attaching.set(id, attempt);
+    try { return await attempt.promise; }
+    finally { if (attaching.get(id) === attempt) attaching.delete(id); }
+  };
+  const dispatch = async request => {
+    touch();
+    if (request.method === 'status') return { running: true, pid: process.pid, runtime, lastAttachmentFailure,
+      history: { ...historyOptions, available: !!history, failure: historyFailure },
+      restoring: restoringCount,
+      mode: 'automatic',
+      threads: [...threads.values()].map(e => ({ ...e.controller.view(),
+        observationMode: e.reader.snapshot().observationMode, watchError: e.reader.snapshot().watchError,
+        hookCounts: e.hookCounts, lastHook: e.lastHook })) };
+    if (request.method === 'stop') { setTimeout(close, 20); return { stopped: true }; }
+    if (request.method === 'attach') {
+      if (!/^[0-9a-f-]{36}$/.test(request.threadId ?? '')) throw new Error('Invalid thread ID');
+      const entry = await attach(request.threadId);
+      return { attached: !!entry, ...(entry ? { thread: entry.controller.view() } : {}) };
+    }
+    if (request.method !== 'hook') throw new Error('Unknown request');
+    const event = request.event;
+    if (!event || !/^[0-9a-f-]{36}$/.test(event.session_id ?? '')) return {};
+    if (event.hook_event_name === 'SessionEnd') {
+      const expectedPath = threads.get(event.session_id)?.reader.path ?? attaching.get(event.session_id)?.path;
+      if (event.transcript_path && expectedPath && event.transcript_path !== expectedPath) return {};
+      await closeThread(event.session_id);
+      if (remembered.delete(event.session_id)) await saveWatchList();
+      return {};
+    }
+    let entry = threads.get(event.session_id);
+    if (!entry) {
+      // Hooks remain fast: initial transcript hydration is asynchronous and never blocks the model.
+      attach(event.session_id, event.transcript_path).catch(() => {});
+      return {};
+    }
+    if (event.transcript_path && event.transcript_path !== entry.reader.path) {
+      // A subagent hook can carry its parent's ID. Never attach it to the parent's controller.
+      const status = await codex.locate(event.session_id);
+      if (event.transcript_path !== status.rolloutPath) return {};
+      // Codex moved the same task to a new current rollout. Replace the reader
+      // rather than continuing to observe the now-obsolete file.
+      await closeThread(event.session_id);
+      attach(event.session_id, event.transcript_path).catch(() => {});
+      return {};
+    }
+    await entry.reader.refresh();
+    entry.hookCounts[event.hook_event_name] = (entry.hookCounts[event.hook_event_name] ?? 0) + 1;
+    entry.lastHook = { event: event.hook_event_name, turnId: event.turn_id ?? null, at: new Date().toISOString() };
+    const response = entry.controller.hook(event);
+    entry.controller.wake();
+    return response;
+  };
+
+  const server = net.createServer(socket => {
+    let data = '';
+    socket.setTimeout(3000, () => socket.destroy());
+    socket.on('error', () => {});
+    socket.on('data', async chunk => {
+      data += chunk.toString();
+      if (data.length > 16384) return socket.destroy();
+      if (!data.includes('\n') || socket.handled) return;
+      socket.handled = true;
+      // The timeout protects receipt of a request, not a valid attachment that
+      // is still reading its rollout. The requesting client owns that deadline.
+      socket.setTimeout(0);
+      try { socket.end(JSON.stringify(await dispatch(JSON.parse(data.split('\n')[0]))) + '\n'); }
+      catch (e) { socket.end(JSON.stringify({ error: e.code ?? e.name ?? 'Error' }) + '\n'); }
+    });
+  });
+  async function close() {
+    if (closing) return;
+    closing = true;
+    clearTimeout(timer);
+    for (const attempt of attaching.values()) attempt.cancelled = true;
+    for (const id of threads.keys()) await closeThread(id);
+    codex.close();
+    await Promise.allSettled([...attaching.values()].map(attempt => attempt.promise));
+    await registryWrite.catch(() => {});
+    clearTimeout(historyExpiry);
+    history?.close();
+    await new Promise(resolve => server.close(resolve));
+    try { await unlink(socketPath()); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    process.removeListener('SIGINT', close);
+    process.removeListener('SIGTERM', close);
+  }
+  server.on('error', error => { throw error; });
+  await new Promise(resolve => server.listen(socketPath(), resolve));
+  await chmod(socketPath(), 0o600);
+  const restored = (async () => {
+    for (const id of [...remembered]) {
+      try { if (!closing && remembered.has(id)) await attach(id); }
+      catch { /* The attachment failure is exposed by status. */ }
+      finally { restoringCount--; }
+    }
+  })();
+  touch();
+  process.send?.({ ready: true });
+  process.once('SIGINT', close);
+  process.once('SIGTERM', close);
+  return { server, close, dispatch, restored };
+}

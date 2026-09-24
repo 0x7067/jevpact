@@ -1,0 +1,13 @@
+{
+  "description": "Jevpact sends lifecycle identities to its local controller. Cooperative pause messages use the native thread interface. No tool payloads are forwarded.",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "node \"$PLUGIN_ROOT/bin/jevpact.js\" hook", "timeout": 2}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "node \"$PLUGIN_ROOT/bin/jevpact.js\" hook", "timeout": 2}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "node \"$PLUGIN_ROOT/bin/jevpact.js\" hook", "timeout": 2}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "node \"$PLUGIN_ROOT/bin/jevpact.js\" hook", "timeout": 2}]}],
+    "Interrupt": [{"hooks": [{"type": "command", "command": "node \"$PLUGIN_ROOT/bin/jevpact.js\" hook", "timeout": 2}]}],
+    "PreCompact": [{"hooks": [{"type": "command", "command": "node \"$PLUGIN_ROOT/bin/jevpact.js\" hook", "timeout": 2}]}],
+    "PostCompact": [{"hooks": [{"type": "command", "command": "node \"$PLUGIN_ROOT/bin/jevpact.js\" hook", "timeout": 2}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "node \"$PLUGIN_ROOT/bin/jevpact.js\" hook", "timeout": 2}]}]
+  }
+}

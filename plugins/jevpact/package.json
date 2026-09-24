@@ -1,0 +1,38 @@
+{
+  "name": "jevpact",
+  "version": "0.1.0-dev.1",
+  "description": "Work-sensitive compaction timing for the Codex desktop app",
+  "author": "Slopware Engineer (https://x.com/aienginerd)",
+  "homepage": "https://x.com/aienginerd",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/transcendr/jevpact.git"
+  },
+  "keywords": ["codex", "plugin", "compaction", "context", "jev"],
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "bin": {
+    "jevpact": "./bin/jevpact.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "eval": "node eval/run.js",
+    "build:plugin": "node scripts/build-plugin.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "hooks",
+    ".codex-plugin",
+    "assets",
+    "docs/install.md",
+    "docs/operations.md",
+    "docs/privacy.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "private": true
+}
