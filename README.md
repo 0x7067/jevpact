@@ -20,4 +20,4 @@ The [package README](plugins/jevpact/README.md) has the full install, update, an
 
 ## License
 
-See [LICENSE](LICENSE). Attribution: [Slopware Engineer on X](https://x.com/aienginerd).
+Jevpact is licensed under [CC BY 4.0](LICENSE). Preferred attribution points to [Slopware Engineer on X](https://x.com/aienginerd).

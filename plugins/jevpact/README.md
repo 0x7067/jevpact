@@ -57,4 +57,4 @@ The service restarts the controller after a process exit. A separate one-shot ch
 
 ## License
 
-See [LICENSE](LICENSE). Attribution for Jevpact points to [Slopware Engineer on X](https://x.com/aienginerd).
+Jevpact is licensed under [CC BY 4.0](LICENSE). Preferred attribution points to [Slopware Engineer on X](https://x.com/aienginerd).
