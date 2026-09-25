@@ -11,8 +11,10 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const taskIdPattern = /^[0-9a-f-]{36}$/;
 
-export const defaultStatePath = () => path.join(os.homedir(), 'Library', 'Application Support', 'Jevpact', 'health-state.json');
-export const defaultSocketPath = () => path.join(os.tmpdir(), `jevpact-${process.getuid?.() ?? os.userInfo().username}`, 'controller.sock');
+export const defaultStatePath = () => process.env.JEVPACT_HEALTH_STATE_PATH
+  || path.join(os.homedir(), 'Library', 'Application Support', 'Jevpact', 'health-state.json');
+export const defaultSocketPath = () => process.env.JEVPACT_SOCKET_PATH
+  || path.join(os.tmpdir(), `jevpact-${process.getuid?.() ?? os.userInfo().username}`, 'controller.sock');
 
 export function healthFailure(status, expectedVersion, expectedThreads) {
   if (!expectedVersion) return 'Installed Jevpact package is unavailable';

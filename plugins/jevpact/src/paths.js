@@ -1,11 +1,16 @@
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { mkdir, lstat, chmod } from 'node:fs/promises';
 
-export const runtimeDir = () => path.join(os.tmpdir(), `jevpact-${process.getuid?.() ?? os.userInfo().username}`);
+export const codexHome = () => path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+const defaultCodexHome = () => path.join(os.homedir(), '.codex');
+export const profileSuffix = () => codexHome() === defaultCodexHome() ? ''
+  : `-${createHash('sha256').update(codexHome()).digest('hex').slice(0, 12)}`;
+export const runtimeDir = () => path.join(os.tmpdir(), `jevpact-${process.getuid?.() ?? os.userInfo().username}${profileSuffix()}`);
 export const socketPath = () => path.join(runtimeDir(), 'controller.sock');
 export const stateDir = () => process.platform === 'darwin'
-  ? path.join(os.homedir(), 'Library', 'Application Support', 'Jevpact')
+  ? path.join(os.homedir(), 'Library', 'Application Support', `Jevpact${profileSuffix()}`)
   : process.platform === 'win32'
     ? path.join(process.env.LOCALAPPDATA || os.homedir(), 'Jevpact')
     : path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'jevpact');

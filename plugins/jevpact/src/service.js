@@ -7,11 +7,13 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { resolveKey, readStoredKey, storeKey } from './credentials.js';
 import { call } from './rpc.js';
-import { ensureState, stateDir, storedKeyPath } from './paths.js';
+import { codexHome, ensureState, profileSuffix, socketPath, stateDir, storedKeyPath } from './paths.js';
 
 const exec = promisify(execFile);
 const taskIdPattern = /^[0-9a-f-]{36}$/;
-export const serviceLabels = { controller: 'com.slopware.jevpact.controller', health: 'com.slopware.jevpact.health' };
+const labelSuffix = profileSuffix().replace('-', '.');
+export const serviceLabels = { controller: `com.slopware.jevpact${labelSuffix}.controller`,
+  health: `com.slopware.jevpact${labelSuffix}.health` };
 const domain = () => `gui/${process.getuid()}`;
 const agentPath = label => path.join(os.homedir(), 'Library', 'LaunchAgents', `${label}.plist`);
 const configPath = () => path.join(stateDir(), 'service.json');
@@ -23,8 +25,10 @@ function xml(value) {
     .replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 }
 
-export function servicePlist({ label, args, interval = null, errorPath }) {
+export function servicePlist({ label, args, interval = null, errorPath, environment = {} }) {
   const argumentsXml = args.map(arg => `      <string>${xml(arg)}</string>`).join('\n');
+  const environmentXml = Object.entries(environment).map(([key, value]) =>
+    `    <key>${xml(key)}</key><string>${xml(value)}</string>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -32,6 +36,9 @@ export function servicePlist({ label, args, interval = null, errorPath }) {
   <key>ProgramArguments</key><array>
 ${argumentsXml}
   </array>
+  <key>EnvironmentVariables</key><dict>
+${environmentXml}
+  </dict>
   <key>RunAtLoad</key><true/>
   ${interval == null ? '<key>KeepAlive</key><true/>' : `<key>StartInterval</key><integer>${interval}</integer>`}
   <key>StandardErrorPath</key><string>${xml(errorPath)}</string>
@@ -174,10 +181,11 @@ export async function installService({ sourceRoot, expectedThreads, nodePath } =
   for (const label of Object.values(serviceLabels)) old[label] = await readOptional(agentPath(label));
   const controller = servicePlist({ label: serviceLabels.controller,
     args: [node, path.join(runtimeRoot, 'bin', 'jevpact.js'), 'serve'],
-    errorPath: path.join(directory, 'controller.stderr.log') });
+    errorPath: path.join(directory, 'controller.stderr.log'), environment: { CODEX_HOME: codexHome() } });
   const health = servicePlist({ label: serviceLabels.health,
     args: [node, probePath(), '--plugin', runtimeRoot, ...ids.flatMap(id => ['--expect-thread', id])], interval: 60,
-    errorPath: path.join(directory, 'health.stderr.log') });
+    errorPath: path.join(directory, 'health.stderr.log'), environment: { CODEX_HOME: codexHome(),
+      JEVPACT_HEALTH_STATE_PATH: path.join(directory, 'health-state.json'), JEVPACT_SOCKET_PATH: socketPath() } });
   let previousPid = null;
   try { previousPid = (await call({ method: 'status' }, { timeout: 1000 })).pid; }
   catch { /* No responding controller before installation. */ }
