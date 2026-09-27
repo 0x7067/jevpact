@@ -30,7 +30,9 @@ export function sourceRequest(visible, provenance) {
   }
   text = text.trim();
   if (!text) return null;
-  return { origin, ...bounded(text, REQUEST_LIMIT) };
+  // Heartbeat assignments can contain their full standing instructions.
+  // The packet-level byte limit still rejects evidence that cannot fit.
+  return { origin, ...bounded(text, origin === 'heartbeat' ? PACKET_LIMIT : REQUEST_LIMIT) };
 }
 
 export function finalReport(visible) {

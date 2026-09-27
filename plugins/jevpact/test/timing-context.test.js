@@ -11,6 +11,27 @@ test('timing input keeps the actual user request and a complete ordinary heartbe
   assert.ok(heartbeat.text.length > 1800);
 });
 
+test('a long heartbeat assignment remains complete when the timing packet fits', () => {
+  const instructions = 'Monitor both tickets and report their settled status. '.repeat(185);
+  const previous = sourceRequest(`<heartbeat><instructions>${instructions}</instructions></heartbeat>`);
+  const current = sourceRequest(`<heartbeat><instructions>${instructions}</instructions></heartbeat>`);
+  const snapshot = {
+    turnId: 'turn-2',
+    messages: [{ role: 'assistant', turnId: 'turn-2', sequence: 30, text: 'Both tickets are complete.' }],
+    recentUserRequests: [
+      { turnId: 'turn-1', sequence: 10, ...previous },
+      { turnId: 'turn-2', sequence: 20, ...current },
+    ],
+    recentFinalReports: [{ turnId: 'turn-2', sequence: 30, text: 'Both tickets are complete.', truncated: false }],
+  };
+  const { packet, metadata } = buildTimingPacket(snapshot);
+  assert.ok(current.text.length > 4000);
+  assert.equal(current.truncated, false);
+  assert.equal(metadata.available, true);
+  assert.equal(packet.currentUser.text, instructions.trim());
+  assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 22 * 1024);
+});
+
 test('timing packet uses the latest source request and current conclusion without stale older pending claims', () => {
   const snapshot = {
     turnId: 'turn-3', messages: [{ role: 'assistant', turnId: 'turn-3', sequence: 30, text: 'Installed and verified.' }],
