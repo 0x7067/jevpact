@@ -89,6 +89,31 @@ test('GUI final_answer is visible after opaque tool activity and only task_compl
   assert.equal(idle.requests, 1);
 });
 
+test('tool template data is bounded and remains outside Jev evidence packets', async t => {
+  const { reader, append } = await fixture(t, [meta(), event('task_started'),
+    record('response_item', { type: 'function_call', call_id: 'call-1', namespace: 'functions',
+      name: 'exec', arguments: JSON.stringify({ cmd: 'rg parser src' }) }),
+    record('response_item', { type: 'function_call_output', call_id: 'call-1', output: 'Result {{thread.id}}' }),
+    record('response_item', { type: 'custom_tool_call', call_id: 'call-2', name: 'inspect', input: 'Check current state.' }),
+  ]);
+  let snapshot = reader.snapshot();
+  assert.equal(snapshot.toolCalls.length, 2);
+  assert.equal(snapshot.toolCalls[0].resultObserved, true);
+  assert.equal(snapshot.toolCalls[1].resultObserved, false);
+  assert.equal(snapshot.lastToolResult.text, 'Result {{thread.id}}');
+  assert.ok(!snapshot.packet.includes('Result {{thread.id}}'));
+  assert.ok(!snapshot.timingPacket?.includes('Result {{thread.id}}'));
+  await append([record('response_item', { type: 'custom_tool_call_output', call_id: 'call-2',
+    output: [{ type: 'input_text', text: 'Z'.repeat(5000) }, { type: 'image', data: 'PRIVATE_IMAGE' }] })]);
+  snapshot = reader.snapshot();
+  assert.equal(snapshot.toolCalls[1].resultObserved, true);
+  assert.equal(snapshot.lastToolResult.name, 'inspect');
+  assert.equal(snapshot.lastToolResult.text.length, 4000);
+  assert.equal(snapshot.lastToolResult.truncated, true);
+  assert.ok(!snapshot.packet.includes('PRIVATE_IMAGE'));
+  assert.ok(!snapshot.packet.includes('Z'.repeat(100)));
+});
+
 test('user stop survives task starts and controller resume until genuine external input', async t => {
   const { reader, append } = await fixture(t, [meta(), event('task_started'), message('user', 'Implement the parser.'), event('turn_aborted', { reason: 'interrupted' })]);
   assert.equal(reader.snapshot().userStopped, true);

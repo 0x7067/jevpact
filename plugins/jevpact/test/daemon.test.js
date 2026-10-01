@@ -7,6 +7,7 @@ import { serve } from '../src/daemon.js';
 import { Transcript } from '../src/transcript.js';
 import { call } from '../src/rpc.js';
 import { History } from '../src/history.js';
+import { emptyConfig, writeConfig } from '../src/config.js';
 
 const id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const deferred = () => {
@@ -107,6 +108,31 @@ test('daemon close drains pending hydration and refuses later attachment', async
 test('ordinary controller reports automatic operation without a transport opt-in', async t => {
   const { daemon } = await fixture(t);
   assert.equal((await daemon.dispatch({ method: 'status' })).mode, 'automatic');
+});
+
+test('reloading a task override changes its controller without replacing the watcher', async t => {
+  const { daemon, readers } = await fixture(t);
+  assert.equal((await daemon.dispatch({ method: 'attach', threadId: id })).attached, true);
+  const before = await daemon.dispatch({ method: 'status' });
+  const document = emptyConfig();
+  document.threads[id] = { settings: { mode: 'observe', minInputTokens: 250000,
+    pauseMessage: 'Finish the current check.', recordDiagnostics: false } };
+  await writeConfig(document, before.configPath);
+  const result = await daemon.dispatch({ method: 'reload-config' });
+  assert.equal(result.reloaded, true);
+  assert.deepEqual(result.restartRequired, []);
+  assert.deepEqual(result.threads, [{ threadId: id, reattachRequired: [], deferred: false }]);
+  const after = await daemon.dispatch({ method: 'status' });
+  assert.equal(after.threads[0].mode, 'observe');
+  assert.equal(readers.length, 1);
+  document.threads[id].settings.watchTranscript = false;
+  await writeConfig(document, before.configPath);
+  assert.deepEqual((await daemon.dispatch({ method: 'reload-config' })).threads[0].reattachRequired, ['watchTranscript']);
+  assert.deepEqual((await daemon.dispatch({ method: 'reload-config' })).threads[0].reattachRequired, ['watchTranscript']);
+  assert.equal((await daemon.dispatch({ method: 'reattach', threadId: id })).attached, true);
+  assert.equal(readers.length, 2);
+  assert.equal(readers[1].options.watch, false);
+  assert.deepEqual((await daemon.dispatch({ method: 'reload-config' })).threads[0].reattachRequired, []);
 });
 
 test('optional collector receives actual controller decisions with their thread identity', async t => {
