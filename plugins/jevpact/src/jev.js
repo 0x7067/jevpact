@@ -56,9 +56,9 @@ export const PAUSE_QUESTIONS = Object.freeze({
   },
   continuation: {
     type: 'choice',
-    instructions: 'Read the latest ordinary assistant wrap-up in the existing assignment. Does it leave a concrete unfinished next action this parent can carry out when resumed, without a new user instruction or an unavailable external result? Judge the expressed work state; a controller request to pause or resume does not itself create unfinished work. Do not require any particular phrase or output format.',
+    instructions: 'Read the latest ordinary assistant wrap-up in the existing assignment. After compaction, is there unfinished work the parent can act on under the existing user request? A stated next step to investigate a failure, obtain diagnostic details through an available authorized path, or resolve a discrepancy is actionable even if its outcome is uncertain. A pending approval for a later activation does not block earlier investigation. The pause itself is temporary and does not mean the assignment is complete or blocked. Judge the expressed work state; a controller request to pause or resume does not itself create unfinished work. Do not require any particular phrase or output format.',
     criteria: {
-      yes: 'The wrap-up identifies an actionable unfinished step within the existing assignment. The parent can continue it without new user input; temporarily waiting for this controller to resume is compatible with that step.',
+      yes: 'The wrap-up identifies unfinished work the parent can start or continue after compaction without new user input, including investigation or reconciliation before a later approval.',
       no: 'The assigned work is complete, needs user input, is blocked with no actionable next step, or is only waiting for a child or external result. Do not invent another task.',
       unknown: 'The visible wrap-up does not establish whether an actionable unfinished step remains, or its continuation intent is ambiguous.',
     },
