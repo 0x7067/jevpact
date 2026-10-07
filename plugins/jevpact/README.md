@@ -59,6 +59,8 @@ The service restarts the controller after a process exit. A separate one-shot ch
 
 Jevpact creates `~/.jevpact/config.json` when the controller or CLI first reads it. Its editable `default` global profile starts with source defaults. If the selected global profile is missing, Jevpact restores the default binding and profile when possible; source defaults remain the fallback. Settings can apply to all tasks, a project directory, or one native task ID; named profiles can be saved and applied at those scopes. The bundled `jevpact-config` skill can walk you through options from a Codex task and change them from a natural-language request.
 
+For a non-default `CODEX_HOME`, this local build appends a home-derived suffix to the config directory, so Strada and default Codex settings remain separate. `config show --global` reports the active path; `JEVPACT_CONFIG_HOME` overrides it.
+
 ```sh
 node plugins/jevpact/bin/jevpact.js config list
 node plugins/jevpact/bin/jevpact.js config tokens

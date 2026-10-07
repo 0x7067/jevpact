@@ -24,6 +24,8 @@ The timing policy remains experimental. A hook installation, a model answer, or 
 
 `~/.jevpact/config.json` is created when the controller or CLI first reads it. Its pre-made `default` global profile contains the source defaults and is editable. If the selected global profile or the default profile entry is missing, Jevpact restores the default binding and entry when possible; source defaults remain the fallback if the repair cannot be saved. `config list` shows common settings first and advanced settings afterward; `config show` includes each effective value and its source. The bundled `jevpact-config` skill uses these commands to explain and change settings when asked in a Codex task.
 
+In this local dual-profile build, a non-default `CODEX_HOME` gets a separate config directory with a suffix derived from its absolute path. Use `config show --global` to see it. `JEVPACT_CONFIG_HOME` still overrides the default location.
+
 ```sh
 node plugins/jevpact/bin/jevpact.js config list
 node plugins/jevpact/bin/jevpact.js config tokens
