@@ -55,6 +55,23 @@ The service restarts the controller after a process exit. A separate one-shot ch
 
 [Operations](docs/operations.md) covers diagnosis and update commands. [Privacy and data handling](docs/privacy.md) explains the external request, local history, and credentials. The [source](src/) and [tests](test/) are included in the public repository.
 
+## Configure it
+
+Jevpact creates `~/.jevpact/config.json` when the controller or CLI first reads it. Its editable `default` global profile starts with source defaults. If the selected global profile is missing, Jevpact restores the default binding and profile when possible; source defaults remain the fallback. Settings can apply to all tasks, a project directory, or one native task ID; named profiles can be saved and applied at those scopes. The bundled `jevpact-config` skill can walk you through options from a Codex task and change them from a natural-language request.
+
+```sh
+node plugins/jevpact/bin/jevpact.js config list
+node plugins/jevpact/bin/jevpact.js config tokens
+node plugins/jevpact/bin/jevpact.js config show --thread current
+node plugins/jevpact/bin/jevpact.js config profile set default minInputTokens 250000
+node plugins/jevpact/bin/jevpact.js config set minInputTokens 250000 --project current
+node plugins/jevpact/bin/jevpact.js config profile save deep-work --thread current
+node plugins/jevpact/bin/jevpact.js config profile apply deep-work --project current
+node plugins/jevpact/bin/jevpact.js config set resumeMessage "Continue from: {{assistant.lastBeforeCompaction}}" --thread current
+```
+
+The pause, resume, and continue-without-compaction message bodies accept dynamic tokens anywhere in their text. Tokens expand when the message is sent; `config tokens` lists the available values. Jevpact keeps fixed identifying prefixes so its transcript reader can exclude those controller messages from work evidence. See [configuration operations](docs/operations.md#configuration) for token availability, precedence, and reload behavior.
+
 ## License
 
 Jevpact is licensed under [CC BY 4.0](LICENSE). Preferred attribution points to [Slopware Engineer on X](https://x.com/aienginerd).

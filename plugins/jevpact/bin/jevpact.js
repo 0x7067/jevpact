@@ -60,6 +60,9 @@ try {
       if (result.lastAttachmentFailure) console.log(`Attachment failed for ${result.lastAttachmentFailure.threadId}: ${result.lastAttachmentFailure.reason}`);
       if (result.history?.failure) console.log(`Diagnostic history error: ${result.history.failure.reason}`);
     }
+  } else if (command === 'config') {
+    const { configCommand } = await import('../src/config-cli.js');
+    console.log(await configCommand(args));
   } else if (command === 'service') {
     const { installService, serviceStatus, uninstallService } = await import('../src/service.js');
     const action = args.shift();
@@ -132,7 +135,7 @@ try {
     await call({ method: 'stop' });
     console.log('Jevpact stopped. Native Codex compaction remains available.');
   } else {
-    console.log('Usage: jevpact start [--thread ID] [--config FILE] | status [--json] | attach ID | stop\n       jevpact service install|update [--expect-thread ID | --clear-expected] [--node ABSOLUTE_PATH] | status [--json] | uninstall\n       jevpact history TASK_ID [--since ISO] [--event EVENT] [--after ID] [--limit N] [--json]\n       jevpact history --stats | --all [--json]\nHistory: rolling 30 days, 5 GB total; --json streams full records as JSONL. --directory selects a custom history store.\nSet JEV_TEST_KEY or JEV_API_KEY. Managed service installation stores the key in a private user file.\nPlugin hooks must be trusted using Codex /hooks.');
+    console.log('Usage: jevpact start [--thread ID] [--config FILE] | status [--json] | attach ID | stop\n       jevpact config help | list | show | set | reset | clear | reattach | profile\n       jevpact service install|update [--expect-thread ID | --clear-expected] [--node ABSOLUTE_PATH] | status [--json] | uninstall\n       jevpact history TASK_ID [--since ISO] [--event EVENT] [--after ID] [--limit N] [--json]\n       jevpact history --stats | --all [--json]\nHistory: rolling 30 days, 5 GB total; --json streams full records as JSONL. --directory selects a custom history store.\nSet JEV_TEST_KEY or JEV_API_KEY. Managed service installation stores the key in a private user file.\nPlugin hooks must be trusted using Codex /hooks.');
     if (command && !['help', '--help', '-h'].includes(command)) process.exitCode = 1;
   }
 } catch (error) {

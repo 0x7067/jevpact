@@ -105,6 +105,82 @@ test('checkpoint sends one ordinary message to the selected active turn', async 
   assert.equal(pauses.length, 1);
 });
 
+test('scoped control-message bodies are injected with the fixed Jevpact prefixes', async t => {
+  const { reader, controller, codex, pauses } = make(t, { config: {
+    pauseMessage: 'Finish the current check and stop this turn.',
+    resumeMessage: 'Continue the saved next action.',
+    deferMessage: 'Continue the current check without compaction.',
+  } });
+  const resumed = [];
+  codex.resume = async (_id, text) => { resumed.push(text); };
+  await pauseParent(reader, controller);
+  assert.equal(pauses[0].text, 'Jevpact context maintenance: Finish the current check and stop this turn.');
+  const tick = controller.tick();
+  await nextTask();
+  reader.update({ compactionGeneration: 1, turnId: 'compact-turn' });
+  await tick;
+  assert.deepEqual(resumed, ['Jevpact compaction complete: Continue the saved next action.']);
+});
+
+test('pause and resume templates expand at their lifecycle stages and freeze pre-compaction text', async t => {
+  const { reader, controller, codex, pauses } = make(t, {
+    config: {
+      pauseMessage: 'Pause for {{user.latestPrompt}}; wrap-up={{pause.wrapUp}}',
+      resumeMessage: 'Before={{assistant.lastBeforeCompaction}}; wrap-up={{pause.wrapUp}}; project={{project.root}}; profile={{profile.name}}; tokens={{context.inputTokens}}; generation={{compaction.generation}}',
+    },
+    templateContext: { projectRoot: '/tmp/project', profileName: 'deep-work' },
+  });
+  reader.s.recentUserRequests = [{ origin: 'ordinary', text: 'Implement the parser.' }];
+  const resumed = [];
+  codex.resume = async (_id, text) => { resumed.push(text); };
+  await pauseParent(reader, controller);
+  assert.match(pauses[0].text, /Pause for Implement the parser/);
+  assert.match(pauses[0].text, /wrap-up=\[unavailable: pause\.wrapUp\]/);
+  const tick = controller.tick();
+  await nextTask();
+  reader.update({ compactionGeneration: 1, turnId: 'compact-turn', messages: [] });
+  await tick;
+  assert.equal(resumed.length, 1);
+  assert.match(resumed[0], /Before=The local behavior is verified/);
+  assert.match(resumed[0], /wrap-up=The local behavior is verified/);
+  assert.match(resumed[0], /project=\/tmp\/project; profile=deep-work; tokens=220000; generation=1/);
+});
+
+test('defer template sees the pause wrap-up and names the observed deferral reason', async t => {
+  const { reader, controller, codex } = make(t, { config: {
+    deferMessage: 'Wrap-up={{pause.wrapUp}}; prior={{assistant.lastBeforeCompaction}}; reason={{lifecycle.reason}}',
+  } });
+  const resumed = [];
+  codex.resume = async (_id, text) => { resumed.push(text); };
+  await pauseParent(reader, controller);
+  controller.evaluate = async () => ({ answers: clearContinuation({ deferral: { choice: 'yes' } }) });
+  await controller.tick();
+  assert.equal(resumed.length, 1);
+  assert.match(resumed[0], /Wrap-up=The local behavior is verified/);
+  assert.match(resumed[0], /prior=\[unavailable: assistant\.lastBeforeCompaction\]/);
+  assert.match(resumed[0], /reason=agent-deferred-compaction/);
+});
+
+test('observe mode records a checkpoint without sending a pause or compaction', async t => {
+  const { controller, pauses, actions } = make(t, { config: { mode: 'observe' } });
+  await controller.tick();
+  assert.equal(controller.log.at(-1).event, 'would-checkpoint');
+  assert.deepEqual(pauses, []);
+  assert.deepEqual(actions, []);
+});
+
+test('a delivered pause keeps its settings until new direction releases it', async t => {
+  const { reader, controller, actions } = make(t);
+  await pauseParent(reader, controller);
+  assert.deepEqual(controller.reconfigure({ mode: 'off' }), { applied: false, deferred: true });
+  assert.equal(controller.view().configPending, true);
+  controller.hook({ session_id: 'thread', hook_event_name: 'UserPromptSubmit', turn_id: 'new-turn' });
+  assert.equal(controller.view().mode, 'off');
+  assert.equal(controller.view().configPending, false);
+  await controller.tick();
+  assert.deepEqual(actions, []);
+});
+
 test('an already idle checkpoint compacts without a pause assessment', async t => {
   const purposes = [];
   const { reader, controller, actions, pauses } = make(t);

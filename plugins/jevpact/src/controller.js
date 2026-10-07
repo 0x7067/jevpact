@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_POLICY, hasUninterpretedActivity } from './policy.js';
+import { renderMessageTemplate } from './message-template.js';
 
 export const PAUSE_PREFIX = 'Jevpact context maintenance:';
 export const RESUME_PREFIX = 'Jevpact compaction complete:';
@@ -24,12 +25,13 @@ const finalReport = (s, p) => {
 };
 const evaluationKey = s => `${stamp(s)}:${s.requests}:${s.messages?.findLast(m => m.role === 'assistant')?.sequence ?? ''}:${s.turnStatus}`;
 const cancelled = () => Object.assign(new Error('Controller action cancelled'), { code: 'action-cancelled' });
+const controlText = (prefix, body, fallback, context) => body == null ? fallback : `${prefix} ${renderMessageTemplate(body, context)}`;
 
 /** Scheduling is driven by transcript changes and lifecycle hooks, never a polling loop. */
 export class Controller extends EventEmitter {
-  constructor({ reader, codex, evaluate, decide, config = {}, now = Date.now }) {
+  constructor({ reader, codex, evaluate, decide, config = {}, templateContext = {}, now = Date.now }) {
     super();
-    Object.assign(this, { reader, codex, evaluate, decide, config, now });
+    Object.assign(this, { reader, codex, evaluate, decide, config, templateContext, now });
     this.state = 'observing';
     this.pending = null;
     this.evaluation = null;
@@ -104,8 +106,26 @@ export class Controller extends EventEmitter {
   view() {
     const s = this.reader.snapshot();
     return { sessionId: s.sessionId, state: this.state, supported: s.supported,
+      mode: this.config.mode ?? 'automatic', configPending: !!this.nextConfig,
       disabledReason: s.disabledReason, usage: usage(s), requestsSinceCompaction: s.requestsSinceCompaction,
       pendingTurnId: this.pending?.turnId ?? null, recoveryRequired: this.pending?.failure ?? null, decisions: this.log };
+  }
+
+  reconfigure(config) {
+    if (this.pending?.delivered) {
+      this.nextConfig = config;
+      return { applied: false, deferred: true };
+    }
+    if (this.pending) this.invalidate('configuration changed');
+    this.config = config;
+    this.nextConfig = null;
+    this.lastEvaluation = '';
+    this.wake();
+    return { applied: true, deferred: false };
+  }
+
+  applyDeferredConfig() {
+    if (this.nextConfig && !this.pending) this.reconfigure(this.nextConfig);
   }
 
   invalidate(reason) {
@@ -116,6 +136,12 @@ export class Controller extends EventEmitter {
     this.pending = null;
     this.state = 'observing';
     this.record('cancelled', { reason });
+    if (this.nextConfig) {
+      this.config = this.nextConfig;
+      this.nextConfig = null;
+      this.lastEvaluation = '';
+      this.wake();
+    }
   }
 
   hook(event) {
@@ -142,7 +168,7 @@ export class Controller extends EventEmitter {
   wake() {
     if (this.closed) return;
     clearTimeout(this.debounce);
-    this.debounce = setTimeout(() => this.tick().catch(e => this.fail(e)), 80);
+    this.debounce = setTimeout(() => this.tick().catch(e => this.fail(e)), this.config.debounceMs ?? 80);
   }
 
   fail(error) {
@@ -175,6 +201,7 @@ export class Controller extends EventEmitter {
         } else if (this.pending) this.invalidate('stopped or unavailable transcript');
         return;
       }
+      if (this.config.mode === 'off') { this.skip('configuration-off', s); return; }
       if (this.state === 'recovery-required') {
         // A failed/ambiguous operation must not silently strand a paused worker or
         // cause a second blind mutation. Only a new user direction releases it.
@@ -243,9 +270,14 @@ export class Controller extends EventEmitter {
         evaluationId: result?.evaluationId ?? null, signals: result?.answers ?? null, latencyMs: result?.latencyMs ?? null });
       this.state = 'observing';
       if (decision.action !== 'checkpoint') return;
+      if (this.config.mode === 'observe') {
+        this.record('would-checkpoint', { kind: decision.kind, reason: decision.reason });
+        return;
+      }
       this.pending = { turnId: s.turnId, stamp: stamp(s), generation: s.compactionGeneration,
         evaluationId: result?.evaluationId ?? null,
-        revision: s.revision, createdAt: this.now(), kind: decision.kind, delivered: false,
+        revision: s.revision, createdAt: this.now(), kind: decision.kind, reason: decision.reason,
+        templateContext: { ...this.templateContext }, delivered: false,
         preNoticeReport: assistantReport(s, s.turnId),
         userEpoch: s.userEpoch, abort: new AbortController() };
       if (s.turnStatus === 'idle') await this.compact(s, false);
@@ -253,6 +285,7 @@ export class Controller extends EventEmitter {
     } finally {
       this.evaluation = null;
       this.busy = false;
+      this.applyDeferredConfig();
       if (this.needsWake && !this.closed) { this.needsWake = false; this.wake(); }
     }
   }
@@ -267,7 +300,9 @@ export class Controller extends EventEmitter {
         && current.turnStatus === 'active' && current.turnId === p.turnId && stamp(current) === p.stamp;
     };
     try {
-      await this.whilePending(p, () => this.codex.steer(s.sessionId, p.turnId, PAUSE_TEXT, { isCurrent }));
+      const message = controlText(PAUSE_PREFIX, this.config.pauseMessage, PAUSE_TEXT,
+        { ...p.templateContext, snapshot: this.reader.snapshot(), phase: 'pause', reason: p.reason, trigger: p.kind });
+      await this.whilePending(p, () => this.codex.steer(s.sessionId, p.turnId, message, { isCurrent }));
       if (!this.isPending(p)) return;
       p.delivered = true;
       this.record('pause-delivered', { turnId: p.turnId, kind: p.kind, transport: 'native-message' });
@@ -322,6 +357,7 @@ export class Controller extends EventEmitter {
       const deferral = result.answers?.deferral?.choice ?? 'unknown';
       const continuation = result.answers?.continuation?.choice ?? 'unknown';
       const freshFinal = finalReport(fresh, p);
+      p.pauseWrapUp = freshFinal?.text ?? final.text;
       const freshEvidenceGap = fresh.latestOmittedActivity?.sequence > (freshFinal?.sequence ?? -1);
       const changed = fresh.revision !== s.revision;
       this.record('pause-checked', { kind: p.kind, deferral, continuation, changed, evidenceGap: !!freshEvidenceGap,
@@ -331,7 +367,8 @@ export class Controller extends EventEmitter {
       if (!['yes', 'no'].includes(deferral)) throw Object.assign(new Error('Deferral answer is unknown'), { code: 'deferral-uncertain' });
       if (!['yes', 'no'].includes(continuation)) throw Object.assign(new Error('Continuation answer is unknown'), { code: 'continuation-uncertain' });
       if (deferral === 'yes' || (freshEvidenceGap && p.kind !== 'pressure')) {
-        this.record('checkpoint-withdrawn', { reason: deferral === 'yes' ? 'agent-deferred-compaction' : 'opaque-activity-after-final' });
+        p.deferralReason = deferral === 'yes' ? 'agent-deferred-compaction' : 'opaque-activity-after-final';
+        this.record('checkpoint-withdrawn', { reason: p.deferralReason });
         if (continuation === 'yes') await this.continueWithoutCompaction(fresh, p);
         else {
           this.pending = null;
@@ -365,7 +402,10 @@ export class Controller extends EventEmitter {
     // transition distinct from an unexpected change to the paused work.
     this.state = 'continuing';
     this.deferredBaseline = { stamp: stamp(s), requests: s.requests, inputTokens: usage(s).inputTokens };
-    await this.whilePending(p, () => this.codex.resume(s.sessionId, DEFER_TEXT, {
+    const message = controlText(PAUSE_PREFIX, this.config.deferMessage, DEFER_TEXT,
+      { ...p.templateContext, snapshot: s, phase: 'defer', reason: p.deferralReason, trigger: p.kind,
+        pauseWrapUp: p.pauseWrapUp });
+    await this.whilePending(p, () => this.codex.resume(s.sessionId, message, {
       expectedTurnId: native.lastTurnId, isCurrent,
     }));
     if (!this.isPending(p)) return;
@@ -405,6 +445,8 @@ export class Controller extends EventEmitter {
         }
         throw Object.assign(new Error('State changed before compaction'), { code: 'changed-before-compaction' });
       }
+      p.preCompactionSnapshot = current;
+      p.lastBeforeCompaction = current.messages?.findLast(message => message.role === 'assistant')?.text ?? null;
       const isCurrent = () => {
         const snapshot = this.reader.snapshot();
         return this.isPending(p) && snapshot.supported && !snapshot.userStopped
@@ -442,7 +484,11 @@ export class Controller extends EventEmitter {
           return;
         }
         stage = 'resume-request';
-        await this.whilePending(p, () => this.codex.resume(s.sessionId, RESUME_TEXT, {
+        const message = controlText(RESUME_PREFIX, this.config.resumeMessage, RESUME_TEXT,
+          { ...p.templateContext, snapshot: p.preCompactionSnapshot, phase: 'resume',
+            reason: 'native-compaction-complete', trigger: p.kind, pauseWrapUp: p.pauseWrapUp,
+            lastBeforeCompaction: p.lastBeforeCompaction, compactionGeneration: after.compactionGeneration });
+        await this.whilePending(p, () => this.codex.resume(s.sessionId, message, {
           expectedTurnId: context.lastTurnId,
           isCurrent: resumeCurrent,
         }));

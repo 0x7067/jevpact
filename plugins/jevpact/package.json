@@ -25,6 +25,7 @@
     "bin",
     "src",
     "hooks",
+    "skills",
     ".codex-plugin",
     "assets",
     "docs/install.md",

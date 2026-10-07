@@ -81,6 +81,7 @@ export class Transcript extends EventEmitter {
       inputTokens: null, modelContextWindow: null, baselineInputTokens: null, recentGrowthTokens: 0,
       latestUserDirection: null, objective: null, messages: [], latestOmittedActivity: null,
       recentUserRequests: [], recentFinalReports: [],
+      toolCalls: [], lastToolResult: null,
       assignmentSourceThreadId: null,
       omissions: { messages: 0, chars: 0, opaqueContent: 0 },
       observationMode: watch ? 'watch' : 'manual', watchError: null,
@@ -297,11 +298,39 @@ export class Transcript extends EventEmitter {
     this.state.revision++;
   }
 
+  toolCall(p, record) {
+    if (typeof p.name !== 'string' || !p.name.trim()) return;
+    const input = typeof p.arguments === 'string' ? p.arguments : typeof p.input === 'string' ? p.input : null;
+    this.state.toolCalls.push({ callId: typeof p.call_id === 'string' ? p.call_id : null,
+      name: p.name.slice(0, 128), namespace: typeof p.namespace === 'string' ? p.namespace.slice(0, 128) : null,
+      input: input?.slice(0, 1_200) ?? null, inputTruncated: input != null && input.length > 1_200,
+      sequence: this.sequence,
+      timestamp: record.timestamp ?? null, resultObserved: false });
+    if (this.state.toolCalls.length > 20) this.state.toolCalls.shift();
+    this.state.revision++;
+  }
+
+  toolResult(p, record, { captureText = true } = {}) {
+    const call = this.state.toolCalls.findLast(item => item.callId && item.callId === p.call_id);
+    if (call) call.resultObserved = true;
+    const output = !captureText ? '' : typeof p.output === 'string' ? p.output : Array.isArray(p.output)
+      ? p.output.filter(item => ['input_text', 'output_text', 'text'].includes(item?.type) && typeof item.text === 'string')
+        .map(item => item.text).join('\n') : '';
+    if (output) this.state.lastToolResult = { name: call?.name ?? (typeof p.name === 'string' ? p.name.slice(0, 128) : null),
+      text: output.slice(0, 4_000), truncated: output.length > 4_000,
+      sequence: this.sequence, timestamp: record.timestamp ?? null };
+    this.state.revision++;
+  }
+
   response(p, record) {
     if (p.type === 'reasoning') return;
-    if (['function_call', 'custom_tool_call'].includes(p.type)) return this.omitted('tool-started-content-omitted', record);
+    if (['function_call', 'custom_tool_call'].includes(p.type)) {
+      this.toolCall(p, record);
+      return this.omitted('tool-started-content-omitted', record);
+    }
     if (['function_call_output', 'custom_tool_call_output'].includes(p.type)) {
-      if (this.nativeDelegation(p, record)) return;
+      if (this.nativeDelegation(p, record)) { this.toolResult(p, record, { captureText: false }); return; }
+      this.toolResult(p, record);
       return this.omitted('tool-result-content-omitted', record);
     }
     if (p.type === 'agent_message') return this.omitted('incoming-agent-message-content-omitted', record);
@@ -355,7 +384,7 @@ export class Transcript extends EventEmitter {
       const request = sourceRequest(visible, provenance);
       if (request) {
         this.state.recentUserRequests.push({ turnId, sequence: this.sequence, ...request });
-        if (this.state.recentUserRequests.length > 8) this.state.recentUserRequests.shift();
+        if (this.state.recentUserRequests.length > 10) this.state.recentUserRequests.shift();
       }
       this.state.userEpoch++;
       this.state.userStopped = STOP.test(visible.trim()) || (provenance?.kind === 'native-delegation' && this.state.userStopped);

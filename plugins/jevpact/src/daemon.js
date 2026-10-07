@@ -11,6 +11,7 @@ import { ensureRuntime, ensureState, socketPath, historyDir } from './paths.js';
 import { History } from './history.js';
 import { call } from './rpc.js';
 import { resolveKey } from './credentials.js';
+import { readConfig, resolveConfig, projectIdentity, configPath, CONFIG_REATTACH_KEYS, CONFIG_RESTART_KEYS } from './config.js';
 
 export async function serve({ apiKey, config = {}, onlyThreads = [], idleMs = 0, transport, onDecision, decisionPolicy = decide } = {}) {
   apiKey ||= await resolveKey();
@@ -25,10 +26,13 @@ export async function serve({ apiKey, config = {}, onlyThreads = [], idleMs = 0,
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
 
   const codex = transport ?? new Codex();
+  let savedConfig = await readConfig();
+  const effectiveFor = state => resolveConfig(savedConfig, { threadId: state.threadId, cwd: state.cwd, base: config });
+  const globalSettings = resolveConfig(savedConfig, { base: config }).settings;
   const runtime = { root: fileURLToPath(new URL('../', import.meta.url)),
     version: JSON.parse(await readFile(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8')).version };
-  const historyOptions = { directory: config.historyDirectory ?? (onlyThreads.length ? path.join(directory, 'history') : historyDir()),
-    retentionDays: config.historyRetentionDays ?? 30, maxBytes: config.historyMaxBytes ?? 5_000_000_000 };
+  const historyOptions = { directory: globalSettings.historyDirectory ?? (onlyThreads.length ? path.join(directory, 'history') : historyDir()),
+    retentionDays: globalSettings.historyRetentionDays, maxBytes: globalSettings.historyMaxBytes };
   let history = null;
   let historyFailure = null;
   let historyExpiry;
@@ -48,7 +52,7 @@ export async function serve({ apiKey, config = {}, onlyThreads = [], idleMs = 0,
   };
   try { scheduleExpiry(); } catch (error) { historyError(error); }
   const retain = (id, event) => {
-    if (!history) return;
+    if (!history || threads.get(id)?.settings.recordDiagnostics === false) return;
     try {
       // Optional diagnostic metadata follows JSON's usual omission semantics.
       // Request/response bodies themselves have already been serialized by Jev.
@@ -122,23 +126,29 @@ export async function serve({ apiKey, config = {}, onlyThreads = [], idleMs = 0,
         if (!state.rolloutPath) throw Object.assign(new Error('Transcript unavailable'), { code: 'transcript-unavailable' });
         if (requestedPath && requestedPath !== state.rolloutPath) throw Object.assign(new Error('Transcript identity mismatch'), { code: 'transcript-identity-mismatch' });
         attempt.path = state.rolloutPath;
-        reader = new Transcript({ sessionId: id, controlPrefixes: [PAUSE_PREFIX, RESUME_PREFIX], allowHookFallback: true });
+        const resolved = effectiveFor({ threadId: id, cwd: state.cwd });
+        const settings = resolved.settings;
+        reader = new Transcript({ sessionId: id, controlPrefixes: [PAUSE_PREFIX, RESUME_PREFIX],
+          watch: settings.watchTranscript, allowHookFallback: settings.allowHookFallback,
+          maxLineBytes: settings.maxLineBytes });
         await reader.open(state.rolloutPath);
         if (closing || attempt.cancelled) return null;
         if (!reader.snapshot().supported) throw Object.assign(new Error('Unsupported transcript'), { code: reader.snapshot().disabledReason });
         codex.bindReader(id, reader);
-        const controller = new Controller({ reader, codex, config,
+        const controller = new Controller({ reader, codex, config: settings,
+          templateContext: { projectRoot: projectIdentity(state.cwd), profileName: resolved.profileName },
           evaluate: (packet, { signal, purpose, onRequest }) => evaluate(packet, { apiKey, signal, purpose, onRequest }), decide: decisionPolicy });
         controller.on('diagnostic', event => retain(id, event));
         if (onDecision) controller.on('decision', decision => onDecision(id, decision));
-        const entry = { id, reader, controller, hookCounts: {}, lastHook: null };
+        const entry = { id, cwd: state.cwd, reader, controller, settings, resolved, configState: null,
+          hookCounts: {}, lastHook: null };
         threads.set(id, entry);
         retain(id, { time: Date.now(), event: 'attached', rolloutPath: state.rolloutPath,
-          config, scope: onlyThreads.length ? 'scoped' : 'global' });
+          config: settings, scope: onlyThreads.length ? 'scoped' : 'global' });
         if (lastAttachmentFailure?.threadId === id) lastAttachmentFailure = null;
         published = true;
         reader.on('change', touch);
-        if (remember && !remembered.has(id)) {
+        if (remember && settings.restoreAttached && !remembered.has(id)) {
           remembered.add(id);
           await saveWatchList();
           if (closing || attempt.cancelled) return null;
@@ -166,13 +176,56 @@ export async function serve({ apiKey, config = {}, onlyThreads = [], idleMs = 0,
   const dispatch = async request => {
     touch();
     if (request.method === 'status') return { running: true, pid: process.pid, runtime, lastAttachmentFailure,
+      configPath: configPath(),
       history: { ...historyOptions, available: !!history, failure: historyFailure },
       restoring: restoringCount,
       mode: 'automatic',
       threads: [...threads.values()].map(e => ({ ...e.controller.view(),
+        configState: e.configState && { ...e.configState, deferred: !!e.controller.nextConfig },
+        matchedProject: e.resolved.matchedProject,
         observationMode: e.reader.snapshot().observationMode, watchError: e.reader.snapshot().watchError,
         hookCounts: e.hookCounts, lastHook: e.lastHook })) };
+    if (request.method === 'reload-config') {
+      const updated = await readConfig();
+      const updatedGlobal = resolveConfig(updated, { base: config }).settings;
+      const restartRequired = CONFIG_RESTART_KEYS.filter(key =>
+        (key === 'historyDirectory' ? updatedGlobal[key] ?? (onlyThreads.length ? path.join(directory, 'history') : historyDir()) : updatedGlobal[key])
+          !== (key === 'historyDirectory' ? historyOptions.directory : historyOptions[key === 'historyRetentionDays' ? 'retentionDays' : 'maxBytes']));
+      savedConfig = updated;
+      const changed = [];
+      let registryChanged = false;
+      for (const entry of threads.values()) {
+        const resolved = effectiveFor({ threadId: entry.id, cwd: entry.cwd });
+        const reattachRequired = CONFIG_REATTACH_KEYS.filter(key => {
+          const readerKey = key === 'watchTranscript' ? 'watch' : key;
+          return entry.reader.options[readerKey] !== resolved.settings[key];
+        });
+        const changedSettings = Object.keys(resolved.settings).some(key => entry.settings[key] !== resolved.settings[key]);
+        const result = changedSettings ? entry.controller.reconfigure(resolved.settings)
+          : { deferred: !!entry.controller.nextConfig };
+        entry.controller.templateContext = { projectRoot: projectIdentity(entry.cwd), profileName: resolved.profileName };
+        entry.settings = resolved.settings;
+        entry.resolved = resolved;
+        entry.configState = { reattachRequired, deferred: result.deferred };
+        if (remember && resolved.settings.restoreAttached !== remembered.has(entry.id)) {
+          if (resolved.settings.restoreAttached) remembered.add(entry.id);
+          else remembered.delete(entry.id);
+          registryChanged = true;
+        }
+        changed.push({ threadId: entry.id, ...entry.configState });
+      }
+      if (registryChanged) await saveWatchList();
+      return { reloaded: true, restartRequired, threads: changed };
+    }
     if (request.method === 'stop') { setTimeout(close, 20); return { stopped: true }; }
+    if (request.method === 'reattach') {
+      if (!/^[0-9a-f-]{36}$/.test(request.threadId ?? '')) throw new Error('Invalid thread ID');
+      const current = threads.get(request.threadId);
+      if (current?.controller.pending) throw Object.assign(new Error('A controller action is in progress'), { code: 'action-in-progress' });
+      if (current) await closeThread(request.threadId);
+      const replacement = await attach(request.threadId);
+      return { attached: !!replacement, ...(replacement ? { thread: replacement.controller.view() } : {}) };
+    }
     if (request.method === 'attach') {
       if (!/^[0-9a-f-]{36}$/.test(request.threadId ?? '')) throw new Error('Invalid thread ID');
       const entry = await attach(request.threadId);
