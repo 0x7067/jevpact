@@ -84,7 +84,9 @@ async function bootstrap(label) {
 
 async function waitForVersion(version) {
   let lastResponse = 'none';
-  for (let attempt = 0; attempt < 60; attempt++) {
+  // Restoring a long rollout can take minutes; a short wait rolls back a healthy update.
+  const deadline = Date.now() + 180000;
+  while (Date.now() < deadline) {
     try {
       const status = await call({ method: 'status' }, { timeout: 2500 });
       lastResponse = `${status.runtime?.version ?? 'unknown'}; restoring ${status.restoring ?? 'unknown'}`;
