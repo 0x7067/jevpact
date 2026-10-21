@@ -159,7 +159,13 @@ export class Controller extends EventEmitter {
       this.invalidate('new user direction');
       this.lastEvaluation = evaluationKey(s);
     } else if (event.hook_event_name === 'PreCompact' && this.state !== 'compacting') {
-      this.invalidate('native or manual compaction');
+      // A native compaction after the pause reached the worker does the job the
+      // pause asked for. Keep owning the paused worker so it is not stranded.
+      if (this.pending?.delivered && this.state === 'awaiting-idle' && this.isPending(this.pending)) {
+        this.pending.adoptedCompaction = true;
+        this.pending.lastBeforeCompaction = s.messages?.findLast(message => message.role === 'assistant')?.text ?? null;
+        this.record('native-compaction-adopted', { turnId: this.pending.turnId, trigger: event.trigger ?? null });
+      } else this.invalidate('native or manual compaction');
     }
 
     return {};
@@ -207,6 +213,11 @@ export class Controller extends EventEmitter {
         // cause a second blind mutation. Only a new user direction releases it.
         if (s.userEpoch === this.pending.userEpoch) return;
         this.invalidate('new direction after unavailable action');
+      }
+      if (this.pending?.adoptedCompaction && this.pending.stamp !== stamp(s) && this.state === 'awaiting-idle'
+        && s.userEpoch === this.pending.userEpoch && s.compactionGeneration > this.pending.generation) {
+        this.pending.stamp = stamp(s);
+        this.pending.generation = s.compactionGeneration;
       }
       if (this.pending && this.pending.stamp !== stamp(s) && this.state !== 'compacting') {
         if (this.pending.delivered && s.userEpoch === this.pending.userEpoch) {
@@ -366,6 +377,17 @@ export class Controller extends EventEmitter {
       if (changed) throw Object.assign(new Error('Continuation evidence changed during the pause check'), { code: 'pause-continuation-stale' });
       if (!['yes', 'no'].includes(deferral)) throw Object.assign(new Error('Deferral answer is unknown'), { code: 'deferral-uncertain' });
       if (!['yes', 'no'].includes(continuation)) throw Object.assign(new Error('Continuation answer is unknown'), { code: 'continuation-uncertain' });
+      if (p.adoptedCompaction) {
+        // Native compaction already ran; never request a second one.
+        if (continuation === 'yes') await this.continueWithoutCompaction(fresh, p);
+        else {
+          this.record('compacted', { kind: p.kind, origin: 'native' });
+          this.pending = null;
+          this.state = 'observing';
+          this.lastEvaluation = evaluationKey(fresh);
+        }
+        return;
+      }
       if (deferral === 'yes' || (freshEvidenceGap && p.kind !== 'pressure')) {
         p.deferralReason = deferral === 'yes' ? 'agent-deferred-compaction' : 'opaque-activity-after-final';
         this.record('checkpoint-withdrawn', { reason: p.deferralReason });
@@ -401,15 +423,21 @@ export class Controller extends EventEmitter {
     // Starting this continuation changes the native turn by design. Keep that
     // transition distinct from an unexpected change to the paused work.
     this.state = 'continuing';
-    this.deferredBaseline = { stamp: stamp(s), requests: s.requests, inputTokens: usage(s).inputTokens };
-    const message = controlText(PAUSE_PREFIX, this.config.deferMessage, DEFER_TEXT,
-      { ...p.templateContext, snapshot: s, phase: 'defer', reason: p.deferralReason, trigger: p.kind,
-        pauseWrapUp: p.pauseWrapUp });
+    const adopted = !!p.adoptedCompaction;
+    if (!adopted) this.deferredBaseline = { stamp: stamp(s), requests: s.requests, inputTokens: usage(s).inputTokens };
+    const message = adopted
+      ? controlText(RESUME_PREFIX, this.config.resumeMessage, RESUME_TEXT,
+        { ...p.templateContext, snapshot: s, phase: 'resume', reason: 'native-compaction-complete',
+          trigger: p.kind, pauseWrapUp: p.pauseWrapUp, lastBeforeCompaction: p.lastBeforeCompaction,
+          compactionGeneration: s.compactionGeneration })
+      : controlText(PAUSE_PREFIX, this.config.deferMessage, DEFER_TEXT,
+        { ...p.templateContext, snapshot: s, phase: 'defer', reason: p.deferralReason, trigger: p.kind,
+          pauseWrapUp: p.pauseWrapUp });
     await this.whilePending(p, () => this.codex.resume(s.sessionId, message, {
       expectedTurnId: native.lastTurnId, isCurrent,
     }));
     if (!this.isPending(p)) return;
-    this.record('continued-without-compaction');
+    this.record(adopted ? 'resumed' : 'continued-without-compaction', adopted ? { origin: 'native-compaction' } : {});
     this.pending = null;
     this.state = 'observing';
     // Reuse the normal request/growth cadence from this deferred checkpoint.

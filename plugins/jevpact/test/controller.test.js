@@ -689,6 +689,55 @@ test('an intervening native compaction after delivered pause is surfaced for rec
   assert.equal(controller.state, 'recovery-required');
   assert.deepEqual(actions, []);
 });
+test('a native compaction after a delivered pause is adopted and the paused worker resumes once', async t => {
+  const { reader, controller, codex, actions } = make(t);
+  const resumed = [];
+  codex.resume = async (_id, text) => { actions.push('resume'); resumed.push(text); };
+  await controller.tick();
+  assert.equal(controller.state, 'awaiting-idle');
+  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: 'auto' });
+  assert.equal(controller.state, 'awaiting-idle');
+  assert.equal(controller.log.at(-1).event, 'native-compaction-adopted');
+  reader.update({ compactionGeneration: 1 });
+  controller.hook({ session_id: 'thread', hook_event_name: 'PostCompact' });
+  await controller.tick();
+  assert.equal(controller.state, 'awaiting-idle');
+  reader.update({ turnStatus: 'idle', messages: [{ role: 'assistant', phase: 'final', turnId: 'turn-1', sequence: 10, text: 'The local behavior is verified. The next step is to run the integration check.' }] });
+  reader.s.packet = buildPacket(reader.s);
+  await controller.tick();
+  assert.deepEqual(actions, ['resume'], 'No second compaction; one resume');
+  assert.match(resumed[0], /^Jevpact compaction complete:/);
+  assert.equal(controller.state, 'observing');
+  assert.equal(controller.log.at(-1).event, 'resumed');
+});
+
+test('an adopted native compaction leaves a completed or waiting worker idle', async t => {
+  const { reader, controller, actions } = make(t);
+  controller.evaluate = async () => ({ answers: clearContinuation({ continuation: { choice: 'no', probability: 0.9, confidence: 0.8 } }) });
+  await controller.tick();
+  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: 'auto' });
+  reader.update({ compactionGeneration: 1 });
+  reader.update({ turnStatus: 'idle', messages: [{ role: 'assistant', phase: 'final', turnId: 'turn-1', sequence: 10, text: 'The assignment is complete.' }] });
+  reader.s.packet = buildPacket(reader.s);
+  await controller.tick();
+  assert.deepEqual(actions, []);
+  assert.equal(controller.state, 'observing');
+});
+
+test('a native compaction before the pause is delivered still releases the checkpoint', async t => {
+  const { controller, codex, actions } = make(t);
+  const steer = deferred();
+  codex.steer = () => steer.promise;
+  const tick = controller.tick();
+  await nextTask();
+  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: 'auto' });
+  steer.resolve();
+  await tick;
+  assert.equal(controller.state, 'observing');
+  assert.equal(controller.log.at(-1).reason, 'native or manual compaction');
+  assert.deepEqual(actions, []);
+});
+
 test('hook metadata excludes arbitrary prompt, tool input and output', () => {
   const reduced = reduceHook({ session_id: 'thread', turn_id: 't', hook_event_name: 'PostToolUse',
     prompt: 'private prompt', tool_input: { secret: 'private' }, tool_response: 'source dump' });
