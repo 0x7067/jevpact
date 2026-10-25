@@ -920,3 +920,32 @@ test('a follow-up turn cannot inherit a pause decision from the previous turn', 
   assert.equal(pauses.length, 1);
   assert.equal(pauses[0].turnId, 'new-user-turn');
 });
+test('new user direction reassesses the updated state instead of marking it assessed', async t => {
+  const decisions = [];
+  const { reader, controller } = make(t, { decide: input => { decisions.push(input.usage.inputTokens);
+    return { action: 'wait', kind: 'semantic', reason: 'not yet' }; } });
+  await controller.tick();
+  const before = decisions.length;
+  // The transcript already shows the new direction when the hook fires.
+  reader.s.userEpoch = 2;
+  controller.hook({ session_id: 'thread', hook_event_name: 'UserPromptSubmit' });
+  await controller.tick();
+  assert.ok(decisions.length > before);
+});
+test('an automatic compaction teaches the pressure ceiling; a manual one does not', async t => {
+  const seen = [];
+  const { reader, controller } = make(t, { decide: input => { seen.push(input.observedNativeLimit);
+    return { action: 'wait', kind: 'semantic', reason: 'not yet' }; } });
+  reader.s.inputTokens = 150000;
+  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: 'manual' });
+  assert.equal(controller.observedNativeLimit, undefined);
+  reader.s.inputTokens = 343000;
+  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: 'auto' });
+  assert.equal(controller.observedNativeLimit, 343000);
+  reader.s.inputTokens = 388000;
+  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: 'auto' });
+  assert.equal(controller.observedNativeLimit, 343000);
+  reader.s.inputTokens = 300000;
+  await controller.tick();
+  assert.equal(seen.at(-1), 343000);
+});

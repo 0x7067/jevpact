@@ -43,6 +43,7 @@ export class Controller extends EventEmitter {
       const s = this.reader.snapshot();
       if (s.compactionGeneration > this.observedGeneration) {
         this.diagnose('native-compaction-observed', {
+          observedNativeLimit: this.observedNativeLimit ?? null,
           origin: this.state === 'compacting' ? 'during-jevpact-operation' : 'external',
           previousGeneration: this.observedGeneration,
         }, s);
@@ -148,6 +149,11 @@ export class Controller extends EventEmitter {
     if (this.closed) return {};
     const s = this.reader.snapshot();
     if (event.session_id !== s.sessionId) return {};
+    if (event.hook_event_name === 'PreCompact' && event.trigger === 'auto') {
+      // Codex does not report its automatic compaction point; learn it from the input it compacts at.
+      const input = usage(s).inputTokens;
+      if (Number.isSafeInteger(input) && input > 0) this.observedNativeLimit = Math.min(this.observedNativeLimit ?? Infinity, input);
+    }
     if (['PreCompact', 'PostCompact', 'Interrupt'].includes(event.hook_event_name)) {
       this.diagnose('hook', { hook: event.hook_event_name, trigger: event.trigger ?? null });
     }
@@ -156,8 +162,11 @@ export class Controller extends EventEmitter {
       this.invalidate('user interrupt');
     } else if (event.hook_event_name === 'UserPromptSubmit' && !event.controllerMessage) {
       this.stopped = false;
+      // The new direction is part of the transcript; reassess the updated state now rather
+      // than discarding the evaluation and treating the stale state as already assessed.
       this.invalidate('new user direction');
-      this.lastEvaluation = evaluationKey(s);
+      this.lastEvaluation = '';
+      this.wake();
     } else if (event.hook_event_name === 'PreCompact' && this.state !== 'compacting') {
       // A native compaction after the pause reached the worker does the job the
       // pause asked for. Keep owning the paused worker so it is not stranded.
@@ -247,7 +256,7 @@ export class Controller extends EventEmitter {
       this.lastEvaluation = fingerprint;
       const policyInput = { usage: u, baseline: { inputTokens: s.baselineInputTokens ?? 0 },
         requestsSinceCompact: s.requestsSinceCompaction, turnStatus: s.turnStatus,
-        chronology: chronology(s), timing: s.timingMetadata, config: this.config };
+        chronology: chronology(s), timing: s.timingMetadata, observedNativeLimit: this.observedNativeLimit, config: this.config };
       let decision = this.decide(policyInput);
       if (decision.kind !== 'pressure' && s.turnStatus === 'active'
         && !s.messages?.some(message => message.role === 'assistant' && message.turnId === s.turnId)) {
