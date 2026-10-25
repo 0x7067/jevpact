@@ -9,6 +9,25 @@ import { decide } from './policy.js';
 import { Controller, PAUSE_PREFIX, RESUME_PREFIX } from './controller.js';
 import { ensureRuntime, ensureState, socketPath, historyDir } from './paths.js';
 import { History } from './history.js';
+
+/** The lowest input this task was compacted at by Codex rather than by Jevpact, from retained history:
+ * each external native-compaction observation is paired with the PreCompact hook recorded since the
+ * previous observation. A restart therefore keeps the measured ceiling instead of relearning it. */
+export function nativeLimitFromHistory(history, threadId) {
+  if (!history) return undefined;
+  try {
+    const hooks = [...history.read({ threadId, event: 'hook' })].filter(e => e.hook === 'PreCompact' && e.trigger !== 'manual');
+    const observed = [...history.read({ threadId, event: 'native-compaction-observed' })];
+    let limit, previous = -Infinity;
+    for (const o of observed) {
+      const pre = hooks.findLast(h => h.time > previous && h.time <= o.time);
+      const input = pre?.context?.usage?.inputTokens;
+      if (o.origin === 'external' && Number.isSafeInteger(input) && input > 0) limit = Math.min(limit ?? Infinity, input);
+      previous = o.time;
+    }
+    return limit;
+  } catch { return undefined; }
+}
 import { call } from './rpc.js';
 import { resolveKey } from './credentials.js';
 import { readConfig, resolveConfig, projectIdentity, configPath, CONFIG_REATTACH_KEYS, CONFIG_RESTART_KEYS } from './config.js';
@@ -135,7 +154,7 @@ export async function serve({ apiKey, config = {}, onlyThreads = [], idleMs = 0,
         if (closing || attempt.cancelled) return null;
         if (!reader.snapshot().supported) throw Object.assign(new Error('Unsupported transcript'), { code: reader.snapshot().disabledReason });
         codex.bindReader(id, reader);
-        const controller = new Controller({ reader, codex, config: settings,
+        const controller = new Controller({ reader, codex, config: settings, observedNativeLimit: nativeLimitFromHistory(history, id),
           templateContext: { projectRoot: projectIdentity(state.cwd), profileName: resolved.profileName },
           evaluate: (packet, { signal, purpose, onRequest }) => evaluate(packet, { apiKey, signal, purpose, onRequest }), decide: decisionPolicy });
         controller.on('diagnostic', event => retain(id, event));

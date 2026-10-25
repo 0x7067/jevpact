@@ -932,7 +932,7 @@ test('new user direction reassesses the updated state instead of marking it asse
   await controller.tick();
   assert.ok(decisions.length > before);
 });
-test('an automatic compaction teaches the pressure ceiling; a manual one does not', async t => {
+test('an external compaction teaches the pressure ceiling; a manual one does not', async t => {
   const seen = [];
   const { reader, controller } = make(t, { decide: input => { seen.push(input.observedNativeLimit);
     return { action: 'wait', kind: 'semantic', reason: 'not yet' }; } });
@@ -940,12 +940,26 @@ test('an automatic compaction teaches the pressure ceiling; a manual one does no
   controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: 'manual' });
   assert.equal(controller.observedNativeLimit, undefined);
   reader.s.inputTokens = 343000;
-  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: 'auto' });
+  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: null });
   assert.equal(controller.observedNativeLimit, 343000);
   reader.s.inputTokens = 388000;
-  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact', trigger: 'auto' });
+  controller.hook({ session_id: 'thread', hook_event_name: 'PreCompact' });
   assert.equal(controller.observedNativeLimit, 343000);
   reader.s.inputTokens = 300000;
   await controller.tick();
   assert.equal(seen.at(-1), 343000);
+});
+test('the measured ceiling is seeded from retained history', async () => {
+  const { nativeLimitFromHistory } = await import('../src/daemon.js');
+  const events = [
+    { time: 1, event: 'hook', hook: 'PreCompact', context: { usage: { inputTokens: 370000 } } },
+    { time: 2, event: 'native-compaction-observed', origin: 'external' },
+    { time: 3, event: 'hook', hook: 'PreCompact', context: { usage: { inputTokens: 250000 } } },
+    { time: 4, event: 'native-compaction-observed', origin: 'during-jevpact-operation' },
+    { time: 5, event: 'hook', hook: 'PreCompact', context: { usage: { inputTokens: 345000 } } },
+    { time: 6, event: 'native-compaction-observed', origin: 'external' },
+  ];
+  const history = { *read({ event }) { yield* events.filter(e => e.event === event); } };
+  assert.equal(nativeLimitFromHistory(history, 'thread'), 345000);
+  assert.equal(nativeLimitFromHistory(null, 'thread'), undefined);
 });

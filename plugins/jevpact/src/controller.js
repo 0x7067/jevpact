@@ -29,9 +29,9 @@ const controlText = (prefix, body, fallback, context) => body == null ? fallback
 
 /** Scheduling is driven by transcript changes and lifecycle hooks, never a polling loop. */
 export class Controller extends EventEmitter {
-  constructor({ reader, codex, evaluate, decide, config = {}, templateContext = {}, now = Date.now }) {
+  constructor({ reader, codex, evaluate, decide, config = {}, templateContext = {}, now = Date.now, observedNativeLimit }) {
     super();
-    Object.assign(this, { reader, codex, evaluate, decide, config, templateContext, now });
+    Object.assign(this, { reader, codex, evaluate, decide, config, templateContext, now, observedNativeLimit });
     this.state = 'observing';
     this.pending = null;
     this.evaluation = null;
@@ -149,8 +149,9 @@ export class Controller extends EventEmitter {
     if (this.closed) return {};
     const s = this.reader.snapshot();
     if (event.session_id !== s.sessionId) return {};
-    if (event.hook_event_name === 'PreCompact' && event.trigger === 'auto') {
-      // Codex does not report its automatic compaction point; learn it from the input it compacts at.
+    if (event.hook_event_name === 'PreCompact' && this.state !== 'compacting' && event.trigger !== 'manual') {
+      // Codex does not report its automatic compaction point (its hook trigger arrives null); learn it
+      // from the input of every compaction Jevpact did not start.
       const input = usage(s).inputTokens;
       if (Number.isSafeInteger(input) && input > 0) this.observedNativeLimit = Math.min(this.observedNativeLimit ?? Infinity, input);
     }
