@@ -25,7 +25,7 @@ export function hasUninterpretedActivity(chronology) {
   return omitted !== null && (!nonnegative(omitted) || omitted > chronology.latestAssistantSequence);
 }
 
-export function decide({ usage, baseline, requestsSinceCompact, signals, chronology, timing, observedNativeLimit, config = {} } = {}) {
+export function decide({ usage, baseline, requestsSinceCompact, signals, chronology, timing, config = {} } = {}) {
   const cfg = { ...DEFAULT_POLICY, ...config };
   for (const key of ['minInputTokens', 'minGrowthTokens', 'minRequests', 'reserveTokens', 'nativeLimitTokens']) {
     if (!nonnegative(cfg[key])) throw new TypeError(`Invalid policy setting ${key}`);
@@ -42,9 +42,7 @@ export function decide({ usage, baseline, requestsSinceCompact, signals, chronol
   if (usage.inputTokens < cfg.minInputTokens) return result('wait', 'Below the discretionary compaction floor', 'ineligible');
   if (requestsSinceCompact < cfg.minRequests) return result('wait', 'Too few requests since the last compaction', 'ineligible');
   if (usage.inputTokens - baseline.inputTokens < cfg.minGrowthTokens) return result('wait', 'Too little new context since the last compaction', 'ineligible');
-  const configured = cfg.nativeLimitTokens > 0 ? Math.min(usage.contextWindow, cfg.nativeLimitTokens) : usage.contextWindow;
-  // The lowest input Codex has automatically compacted this thread at is a measured ceiling.
-  const limit = nonnegative(observedNativeLimit) && observedNativeLimit > 0 ? Math.min(configured, observedNativeLimit) : configured;
+  const limit = cfg.nativeLimitTokens > 0 ? Math.min(usage.contextWindow, cfg.nativeLimitTokens) : usage.contextWindow;
   const reserve = Math.max(cfg.reserveTokens, Math.ceil(limit * cfg.reserveRatio), (usage.recentGrowthTokens ?? 0) * cfg.growthReserveMultiplier);
   if (limit - usage.inputTokens <= reserve) return result('checkpoint', 'Remaining headroom has reached the wrap-up reserve', 'pressure');
   if (chronology !== undefined && hasUninterpretedActivity(chronology)) {

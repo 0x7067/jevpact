@@ -29,9 +29,9 @@ const controlText = (prefix, body, fallback, context) => body == null ? fallback
 
 /** Scheduling is driven by transcript changes and lifecycle hooks, never a polling loop. */
 export class Controller extends EventEmitter {
-  constructor({ reader, codex, evaluate, decide, config = {}, templateContext = {}, now = Date.now, observedNativeLimit }) {
+  constructor({ reader, codex, evaluate, decide, config = {}, templateContext = {}, now = Date.now }) {
     super();
-    Object.assign(this, { reader, codex, evaluate, decide, config, templateContext, now, observedNativeLimit });
+    Object.assign(this, { reader, codex, evaluate, decide, config, templateContext, now });
     this.state = 'observing';
     this.pending = null;
     this.evaluation = null;
@@ -43,7 +43,6 @@ export class Controller extends EventEmitter {
       const s = this.reader.snapshot();
       if (s.compactionGeneration > this.observedGeneration) {
         this.diagnose('native-compaction-observed', {
-          observedNativeLimit: this.observedNativeLimit ?? null,
           origin: this.state === 'compacting' ? 'during-jevpact-operation' : 'external',
           previousGeneration: this.observedGeneration,
         }, s);
@@ -149,12 +148,6 @@ export class Controller extends EventEmitter {
     if (this.closed) return {};
     const s = this.reader.snapshot();
     if (event.session_id !== s.sessionId) return {};
-    if (event.hook_event_name === 'PreCompact' && this.state !== 'compacting' && event.trigger !== 'manual') {
-      // Codex does not report its automatic compaction point (its hook trigger arrives null); learn it
-      // from the input of every compaction Jevpact did not start.
-      const input = usage(s).inputTokens;
-      if (Number.isSafeInteger(input) && input > 0) this.observedNativeLimit = Math.min(this.observedNativeLimit ?? Infinity, input);
-    }
     if (['PreCompact', 'PostCompact', 'Interrupt'].includes(event.hook_event_name)) {
       this.diagnose('hook', { hook: event.hook_event_name, trigger: event.trigger ?? null });
     }
@@ -257,7 +250,7 @@ export class Controller extends EventEmitter {
       this.lastEvaluation = fingerprint;
       const policyInput = { usage: u, baseline: { inputTokens: s.baselineInputTokens ?? 0 },
         requestsSinceCompact: s.requestsSinceCompaction, turnStatus: s.turnStatus,
-        chronology: chronology(s), timing: s.timingMetadata, observedNativeLimit: this.observedNativeLimit, config: this.config };
+        chronology: chronology(s), timing: s.timingMetadata, config: this.config };
       let decision = this.decide(policyInput);
       if (decision.kind !== 'pressure' && s.turnStatus === 'active'
         && !s.messages?.some(message => message.role === 'assistant' && message.turnId === s.turnId)) {

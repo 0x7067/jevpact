@@ -145,11 +145,3 @@ test('headroom pressure remains explicit despite an uninterpreted opaque result'
   assert.equal(decide(current).action, 'checkpoint');
   assert.equal(decide(current).kind, 'pressure');
 });
-test('pressure stays ahead of the observed native compaction point', () => {
-  const base = { usage: { inputTokens: 315000, contextWindow: 475000, recentGrowthTokens: 2000 },
-    baseline: { inputTokens: 0 }, requestsSinceCompact: 10 };
-  assert.notEqual(decide(base).kind, 'pressure');
-  const learned = decide({ ...base, observedNativeLimit: 343000 });
-  assert.equal(learned.kind, 'pressure');
-  assert.equal(learned.action, 'checkpoint');
-});
