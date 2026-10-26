@@ -447,3 +447,10 @@ test('watch callback incrementally refreshes and late watcher errors do not cras
   assert.equal(reader.snapshot().observationMode, 'hooks');
   assert.equal(reader.snapshot().supported, true);
 });
+
+test('a session tool catalogue record does not disable supervision', async t => {
+  const { reader } = await fixture(t, [meta(), record('response_item', { type: 'additional_tools', tools: [] }),
+    message('user', 'Continue the assignment.')]);
+  assert.equal(reader.snapshot().supported, true);
+  assert.equal(reader.snapshot().latestUserDirection.text, 'Continue the assignment.');
+});

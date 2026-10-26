@@ -323,7 +323,8 @@ export class Transcript extends EventEmitter {
   }
 
   response(p, record) {
-    if (p.type === 'reasoning') return;
+    // A session's tool catalogue (written at session start since Codex 0.163) carries no conversation.
+    if (p.type === 'reasoning' || p.type === 'additional_tools') return;
     if (['function_call', 'custom_tool_call'].includes(p.type)) {
       this.toolCall(p, record);
       return this.omitted('tool-started-content-omitted', record);
