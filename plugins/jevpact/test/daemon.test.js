@@ -8,6 +8,7 @@ import { Transcript } from '../src/transcript.js';
 import { call } from '../src/rpc.js';
 import { History } from '../src/history.js';
 import { emptyConfig, writeConfig } from '../src/config.js';
+import { stateDir } from '../src/paths.js';
 
 const id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const deferred = () => {
@@ -240,11 +241,11 @@ test('ordinary startup restores remembered tasks without a hook or manual attach
 });
 
 test('ordinary startup migrates the temporary remembered task list to persistent state', async t => {
-  const { daemon, directory } = await fixture(t, { persistent: true, legacyWatchList: true });
+  const { daemon } = await fixture(t, { persistent: true, legacyWatchList: true });
   await daemon.restored;
   const status = await daemon.dispatch({ method: 'status' });
   assert.equal(status.threads[0]?.sessionId, id);
-  const durable = path.join(directory, 'Library', 'Application Support', 'Jevpact', 'watched-threads.json');
+  const durable = path.join(stateDir(), 'watched-threads.json');
   assert.deepEqual(JSON.parse(await readFile(durable, 'utf8')), [id]);
 });
 
