@@ -66,7 +66,15 @@ async function loaded(label) {
 }
 
 async function bootout(label) {
-  if (await loaded(label)) await exec('/bin/launchctl', ['bootout', `${domain()}/${label}`], { timeout: 10000 });
+  if (!await loaded(label)) return;
+  await exec('/bin/launchctl', ['bootout', `${domain()}/${label}`], { timeout: 10000 });
+  // launchctl can return before the old job disappears. A failed bootstrap's
+  // subsequent print can otherwise mistake that retiring job for the new one.
+  for (let attempt = 0; attempt < 80; attempt++) {
+    if (!await loaded(label)) return;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error(`Previous Jevpact job did not unload: ${label}`);
 }
 
 async function bootstrap(label) {
