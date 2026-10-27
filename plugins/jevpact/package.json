@@ -1,14 +1,20 @@
 {
   "name": "jevpact",
-  "version": "0.1.0-dev.1",
+  "version": "0.1.0-dev.2+openrouter.1",
   "description": "Work-sensitive compaction timing for the Codex desktop app",
   "author": "Slopware Engineer (https://x.com/aienginerd)",
   "homepage": "https://x.com/aienginerd",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/transcendr/jevpact.git"
+    "url": "git+https://github.com/0x7067/jevpact.git"
   },
-  "keywords": ["codex", "plugin", "compaction", "context", "jev"],
+  "keywords": [
+    "codex",
+    "plugin",
+    "compaction",
+    "context",
+    "jev"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22.13.0"

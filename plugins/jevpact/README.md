@@ -36,6 +36,30 @@ The install command saves the key in a private user file, installs two macOS Lau
 
 ## What it does
 
+### OpenRouter (this fork)
+
+This fork can call **Jev through OpenRouter's native System One API**. It sends
+the same bounded state and typed questions, and validates the same probability
+and confidence answers. It does not use a chat model or a replacement rubric.
+
+Load `OPENROUTER_API_KEY` from your secret manager, then run:
+
+```sh
+JEV_PROVIDER=openrouter JEV_MODEL=typesafe/jev-1.13 node plugins/jevpact/bin/jevpact.js service install
+```
+
+The model defaults to `typesafe/jev-1.13` for OpenRouter, matching upstream's
+Jev 1.13 policy. `JEV_MODEL` can select another Jev release. The service remembers
+the provider and model for updates and restarts. Its private `openrouter-credential`
+file is separate from the direct TypeSafe credential, and no key is placed in a
+LaunchAgent environment. Direct TypeSafe access remains the default when no
+provider is selected. See [OpenRouter's Jev SDK documentation](https://openrouter.ai/docs/guides/community/typesafe-sdk).
+
+OpenRouter bills these requests and forwards the bounded task evidence to
+TypeSafe. Review both services' data policies before enabling it for a project.
+
+### Compaction lifecycle
+
 1. Trusted hooks send task and lifecycle identities to a local controller. The controller reads the local rollout incrementally and keeps a bounded view of recent visible work.
 2. Above an eligibility floor, Jev judges whether the current step has a usable conclusion and whether the parent is waiting for an external result. Context pressure remains a separate fallback.
 3. For an active task, the controller sends a plain-language pause request. After the final response, a clear request to defer compaction vetoes that checkpoint. Otherwise the controller requests native compaction and waits for its completion event.

@@ -6,6 +6,17 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { resolveKey } from '../src/credentials.js';
 import { reduceHook } from '../src/hook.js';
 import { PAUSE_PREFIX } from '../src/controller.js';
+import { storedKeyPath } from '../src/paths.js';
+
+test('OpenRouter resolves only its own credentials and uses a separate stored file', async () => {
+  const env = { JEV_PROVIDER: 'openrouter', OPENROUTER_API_KEY: 'router', JEV_TEST_KEY: 'jev-test', JEV_API_KEY: 'jev-api' };
+  assert.equal(await resolveKey({ env, keyPath: null, globalValue: async () => 'global' }), 'router');
+  delete env.OPENROUTER_API_KEY;
+  assert.equal(await resolveKey({ env, keyPath: null, globalValue: async name => name === 'OPENROUTER_API_KEY' ? 'global-router' : 'wrong' }), 'global-router');
+  assert.equal(await resolveKey({ env, keyPath: null, globalValue: async () => '' }), '');
+  assert.notEqual(storedKeyPath('openrouter'), storedKeyPath('jev'));
+  await assert.rejects(resolveKey({ env: { JEV_PROVIDER: 'other' }, keyPath: null }), /JEV_PROVIDER/);
+});
 
 test('credential names take priority before process versus global origin', async () => {
   const cases = [

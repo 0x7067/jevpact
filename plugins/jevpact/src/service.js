@@ -7,6 +7,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { resolveKey, readStoredKey, storeKey } from './credentials.js';
 import { call } from './rpc.js';
+import { DEFAULT_MODEL, OPENROUTER_MODEL } from './jev.js';
 import { codexHome, ensureState, profileSuffix, socketPath, stateDir, storedKeyPath } from './paths.js';
 
 const exec = promisify(execFile);
@@ -163,6 +164,11 @@ export async function installService({ sourceRoot, expectedThreads, nodePath } =
   const version = manifest.version;
   if (typeof version !== 'string' || !version.trim()) throw new Error('Invalid plugin version');
   const prior = await readServiceConfig();
+  const provider = process.env.JEV_PROVIDER ?? prior?.provider ?? 'jev';
+  if (!['jev', 'openrouter'].includes(provider)) throw new Error('JEV_PROVIDER must be jev or openrouter');
+  const model = process.env.JEV_MODEL ?? (prior?.provider === provider ? prior.model : null)
+    ?? (provider === 'openrouter' ? OPENROUTER_MODEL : DEFAULT_MODEL);
+  if (typeof model !== 'string' || !model.trim()) throw new Error('Jev model must be configured');
   const ids = expectedThreads === undefined ? prior?.expectedThreads ?? [] : [...new Set(expectedThreads)];
   if (ids.some(id => !taskIdPattern.test(id))) throw new Error('Invalid expected task ID');
   const node = nodePath ?? await findNode();
@@ -172,8 +178,9 @@ export async function installService({ sourceRoot, expectedThreads, nodePath } =
   if (!nodeVersion || Number(nodeVersion[1]) < 22 || Number(nodeVersion[1]) === 22 && Number(nodeVersion[2]) < 13) {
     throw new Error('Jevpact requires Node.js 22.13 or later');
   }
-  const freshKey = await resolveKey({ keyPath: null });
-  if (!freshKey && !await readStoredKey()) throw new Error('Set JEV_API_KEY or JEV_TEST_KEY before installing the service');
+  const freshKey = await resolveKey({ keyPath: null, provider });
+  if (!freshKey && !await readStoredKey(storedKeyPath(provider))) throw new Error(provider === 'openrouter'
+    ? 'Set OPENROUTER_API_KEY before installing the service' : 'Set JEV_API_KEY or JEV_TEST_KEY before installing the service');
   const sourceProbe = await readFile(path.join(sourceRoot, 'bin', 'jevpact-health.js'), 'utf8');
   const directory = await ensureState();
   const runtimeRoot = await stageRuntime(sourceRoot, version);
@@ -183,7 +190,8 @@ export async function installService({ sourceRoot, expectedThreads, nodePath } =
   for (const label of Object.values(serviceLabels)) old[label] = await readOptional(agentPath(label));
   const controller = servicePlist({ label: serviceLabels.controller,
     args: [node, path.join(runtimeRoot, 'bin', 'jevpact.js'), 'serve'],
-    errorPath: path.join(directory, 'controller.stderr.log'), environment: { CODEX_HOME: codexHome() } });
+    errorPath: path.join(directory, 'controller.stderr.log'), environment: { CODEX_HOME: codexHome(),
+      JEV_PROVIDER: provider, JEV_MODEL: model } });
   const health = servicePlist({ label: serviceLabels.health,
     args: [node, probePath(), '--plugin', runtimeRoot, ...ids.flatMap(id => ['--expect-thread', id])], interval: 60,
     errorPath: path.join(directory, 'health.stderr.log'), environment: { CODEX_HOME: codexHome(),
@@ -192,7 +200,7 @@ export async function installService({ sourceRoot, expectedThreads, nodePath } =
   try { previousPid = (await call({ method: 'status' }, { timeout: 1000 })).pid; }
   catch { /* No responding controller before installation. */ }
 
-  if (freshKey) await storeKey(freshKey);
+  if (freshKey) await storeKey(freshKey, provider);
   await writePrivate(probePath(), sourceProbe);
   await bootout(serviceLabels.health);
   await bootout(serviceLabels.controller);
@@ -204,7 +212,7 @@ export async function installService({ sourceRoot, expectedThreads, nodePath } =
     await bootstrap(serviceLabels.controller);
     const status = await waitForVersion(version);
     await bootstrap(serviceLabels.health);
-    await writePrivate(configPath(), JSON.stringify({ version, sourceRoot, runtimeRoot, nodePath: node, expectedThreads: ids }) + '\n');
+    await writePrivate(configPath(), JSON.stringify({ version, sourceRoot, runtimeRoot, nodePath: node, expectedThreads: ids, provider, model }) + '\n');
     return { version, pid: status.pid, expectedThreads: ids, runtimeRoot };
   } catch (error) {
     await bootout(serviceLabels.health).catch(() => {});
@@ -237,6 +245,7 @@ export async function serviceStatus({ sourceRoot } = {}) {
   } catch { /* A stopped controller is reported through the loaded and runtime fields. */ }
   const state = await readOptional(path.join(stateDir(), 'health-state.json'));
   return { installed: !!config, controllerLoaded, healthLoaded, configuredVersion: config?.version ?? null,
+    provider: config?.provider ?? 'jev', model: config?.model ?? DEFAULT_MODEL,
     availableVersion, updateRequired: !!config && !!availableVersion && availableVersion !== runtime?.version,
     runtime, health: state ? JSON.parse(state) : null };
 }
@@ -249,7 +258,7 @@ export async function uninstallService() {
     try { await unlink(agentPath(label)); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  for (const file of [configPath(), probePath(), storedKeyPath(), path.join(stateDir(), 'health-state.json')]) {
+  for (const file of [configPath(), probePath(), storedKeyPath('jev'), storedKeyPath('openrouter'), path.join(stateDir(), 'health-state.json')]) {
     try { await unlink(file); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }

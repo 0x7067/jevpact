@@ -7,6 +7,7 @@ Jevpact is a Codex plugin made of JavaScript files and hook definitions. There i
 - macOS with the Codex desktop app. Jevpact's native control adapter was tested against the private desktop interface in Codex `0.155.0-alpha.9.2`; later builds must be checked before relying on it.
 - Node.js 22.13 or later, available at a stable absolute path.
 - A key for TypeSafe's hosted Jev API. Obtain access through the [TypeSafe console](https://console.typesafe.ai/) and review its [API reference](https://api.typesafe.ai/docs).
+- Alternatively, an OpenRouter key with `JEV_PROVIDER=openrouter` uses Jev via `https://openrouter.ai/api/v1/systemone` (default model `typesafe/jev-1.13`). Load `OPENROUTER_API_KEY` through your secret manager before `service install`. The provider and model persist across service updates; its key is stored privately as `openrouter-credential` rather than `credential`.
 - Permission to read the current user's Codex rollout and index files, and to install per-user LaunchAgents.
 
 ## Full local install

@@ -35,11 +35,14 @@ try {
         const { serviceStatus } = await import('../src/service.js');
         if ((await serviceStatus()).controllerLoaded) throw new Error('The managed service is installed; use jevpact service status.');
       }
-      const { resolveKey } = await import('../src/credentials.js');
+      const { resolveKey, storeKey } = await import('../src/credentials.js');
       const key = await resolveKey();
-      if (!key) throw new Error('Set JEV_TEST_KEY or JEV_API_KEY before starting Jevpact.');
+      if (!key) throw new Error('Set OPENROUTER_API_KEY for JEV_PROVIDER=openrouter, or JEV_TEST_KEY / JEV_API_KEY for Jev.');
+      await storeKey(key);
+      const environment = { ...process.env };
+      for (const name of ['JEV_TEST_KEY', 'JEV_API_KEY', 'OPENROUTER_API_KEY']) delete environment[name];
       const child = spawn(process.execPath, [fileURLToPath(import.meta.url), 'serve', ...args], {
-        detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: { ...process.env, JEV_TEST_KEY: key },
+        detached: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], env: environment,
       });
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => { child.disconnect(); reject(new Error('Jevpact startup timed out')); }, 15000);
@@ -135,7 +138,7 @@ try {
     await call({ method: 'stop' });
     console.log('Jevpact stopped. Native Codex compaction remains available.');
   } else {
-    console.log('Usage: jevpact start [--thread ID] [--config FILE] | status [--json] | attach ID | stop\n       jevpact config help | list | show | set | reset | clear | reattach | profile\n       jevpact service install|update [--expect-thread ID | --clear-expected] [--node ABSOLUTE_PATH] | status [--json] | uninstall\n       jevpact history TASK_ID [--since ISO] [--event EVENT] [--after ID] [--limit N] [--json]\n       jevpact history --stats | --all [--json]\nHistory: rolling 30 days, 5 GB total; --json streams full records as JSONL. --directory selects a custom history store.\nSet JEV_TEST_KEY or JEV_API_KEY. Managed service installation stores the key in a private user file.\nPlugin hooks must be trusted using Codex /hooks.');
+    console.log('Usage: jevpact start [--thread ID] [--config FILE] | status [--json] | attach ID | stop\n       jevpact config help | list | show | set | reset | clear | reattach | profile\n       jevpact service install|update [--expect-thread ID | --clear-expected] [--node ABSOLUTE_PATH] | status [--json] | uninstall\n       jevpact history TASK_ID [--since ISO] [--event EVENT] [--after ID] [--limit N] [--json]\n       jevpact history --stats | --all [--json]\nHistory: rolling 30 days, 5 GB total; --json streams full records as JSONL. --directory selects a custom history store.\nSet JEV_PROVIDER=openrouter and OPENROUTER_API_KEY, or JEV_TEST_KEY / JEV_API_KEY for direct Jev. Managed service installation stores the key in a private user file.\nPlugin hooks must be trusted using Codex /hooks.');
     if (command && !['help', '--help', '-h'].includes(command)) process.exitCode = 1;
   }
 } catch (error) {

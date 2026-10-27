@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { buildRequest, evaluate, validateAnswers, QUESTIONS, PAUSE_QUESTIONS, TIMING2_QUESTIONS, DEFAULT_MODEL } from '../src/jev.js';
+import { buildRequest, evaluate, validateAnswers, QUESTIONS, PAUSE_QUESTIONS, TIMING2_QUESTIONS, DEFAULT_MODEL, OPENROUTER_MODEL } from '../src/jev.js';
 
 function answers(questions = QUESTIONS) {
   return Object.fromEntries(Object.entries(questions).map(([id, question]) => {
@@ -16,6 +16,34 @@ async function server(t, handler) {
   t.after(() => new Promise(resolve => instance.close(resolve)));
   return `http://127.0.0.1:${instance.address().port}/v1/systemone`;
 }
+
+for (const [purpose, questions] of Object.entries({ timing: QUESTIONS, timing2: TIMING2_QUESTIONS, pause: PAUSE_QUESTIONS })) {
+  test(`OpenRouter sends native Jev ${purpose} questions and validates typed answers`, async t => {
+    const key = 'openrouter-placeholder';
+    let sent;
+    const endpoint = await server(t, async (request, response) => {
+      assert.equal(request.headers.authorization, `Bearer ${key}`);
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      sent = JSON.parse(Buffer.concat(chunks).toString());
+      response.end(JSON.stringify({ model: 'typesafe/jev-1.13-snapshot', answers: answers(questions), usage: { cost: 0.0001 } }));
+    });
+    const result = await evaluate(`Evidence containing ${key}`, { provider: 'openrouter', apiKey: key, endpoint, purpose });
+    assert.equal(sent.model, OPENROUTER_MODEL);
+    assert.deepEqual(sent.questions, questions);
+    assert.deepEqual(sent.state, { excerpt: 'Evidence containing [REDACTED_JEV_KEY]' });
+    assert.deepEqual(result.request, sent);
+    assert.equal(result.model, 'typesafe/jev-1.13-snapshot');
+    assert.deepEqual(result.answers, validateAnswers(answers(questions), { purpose }));
+    assert.equal(result.usage.cost, 0.0001);
+  });
+}
+
+test('OpenRouter rejects malformed typed answers and unsupported providers', async t => {
+  const endpoint = await server(t, (_, response) => response.end(JSON.stringify({ model: OPENROUTER_MODEL, answers: {} })));
+  await assert.rejects(evaluate('Evidence', { provider: 'openrouter', apiKey: 'placeholder', endpoint }), { code: 'jev-invalid-response' });
+  await assert.rejects(evaluate('Evidence', { provider: 'other', apiKey: 'placeholder', endpoint }), { code: 'jev-invalid-provider' });
+});
 
 test('four questions share one bounded state and preserve input', () => {
   const excerpt = { objective: 'Fix clock', messages: ['Check traces', 'Resolved'] };

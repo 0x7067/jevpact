@@ -15,7 +15,7 @@ import { readConfig, resolveConfig, projectIdentity, configPath, CONFIG_REATTACH
 
 export async function serve({ apiKey, config = {}, onlyThreads = [], idleMs = 0, transport, onDecision, decisionPolicy = decide } = {}) {
   apiKey ||= await resolveKey();
-  if (!apiKey) throw Object.assign(new Error('Set JEV_TEST_KEY or JEV_API_KEY before starting Jevpact'), { code: 'missing-key' });
+  if (!apiKey) throw Object.assign(new Error('Set OPENROUTER_API_KEY for JEV_PROVIDER=openrouter, or JEV_TEST_KEY / JEV_API_KEY for Jev'), { code: 'missing-key' });
   const directory = await ensureRuntime();
   try { await call({ method: 'status' }); return { alreadyRunning: true }; }
   catch (e) { if (!['ENOENT', 'ECONNREFUSED'].includes(e.code)) throw e; }

@@ -1,5 +1,7 @@
 export const DEFAULT_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 export const DEFAULT_MODEL = 'jev-1.13.0';
+export const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/systemone';
+export const OPENROUTER_MODEL = 'typesafe/jev-1.13';
 export const MAX_EXCERPT_BYTES = 24 * 1024;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 
@@ -163,11 +165,14 @@ function redact(value, key) {
 }
 
 export async function evaluate(excerpt, options = {}) {
-  const apiKey = options.apiKey ?? (process.env.JEV_TEST_KEY || process.env.JEV_API_KEY);
-  if (typeof apiKey !== 'string' || !apiKey.trim()) throw codedError('missing-key', 'Set JEV_TEST_KEY or JEV_API_KEY before evaluating Jev');
-  const model = options.model ?? process.env.JEV_MODEL ?? DEFAULT_MODEL;
+  const provider = options.provider ?? process.env.JEV_PROVIDER ?? 'jev';
+  if (!['jev', 'openrouter'].includes(provider)) throw codedError('jev-invalid-provider', 'JEV_PROVIDER must be jev or openrouter');
+  const openrouter = provider === 'openrouter';
+  const apiKey = options.apiKey ?? (openrouter ? process.env.OPENROUTER_API_KEY : process.env.JEV_TEST_KEY || process.env.JEV_API_KEY);
+  if (typeof apiKey !== 'string' || !apiKey.trim()) throw codedError('missing-key', openrouter ? 'Set OPENROUTER_API_KEY before evaluating' : 'Set JEV_TEST_KEY or JEV_API_KEY before evaluating Jev');
+  const model = options.model ?? process.env.JEV_MODEL ?? (openrouter ? OPENROUTER_MODEL : DEFAULT_MODEL);
   if (typeof model !== 'string' || !model.trim()) throw codedError('jev-invalid-model', 'Jev model must be configured');
-  const endpoint = endpointURL(options.endpoint ?? DEFAULT_ENDPOINT);
+  const endpoint = endpointURL(options.endpoint ?? (openrouter ? OPENROUTER_ENDPOINT : DEFAULT_ENDPOINT));
   const purpose = options.purpose ?? 'timing';
   let request;
   try { request = { model, ...buildRequest(redact(excerpt, apiKey), { purpose }) }; }

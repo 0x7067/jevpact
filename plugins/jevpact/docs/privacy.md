@@ -2,6 +2,14 @@
 
 Jevpact runs locally except for its requests to the hosted TypeSafe Jev API. It is not affiliated with OpenAI or TypeSafe AI.
 
+This fork also supports `JEV_PROVIDER=openrouter`. That mode sends the same
+bounded state and questions through OpenRouter's System One API to TypeSafe's
+Jev model, billed by OpenRouter. OpenRouter and TypeSafe both process the
+request. The OpenRouter key is stored separately in a private `0600`
+`openrouter-credential` file in the same state directory; it is never written
+to LaunchAgent environment variables. Service uninstall removes both providers'
+credential files. The same diagnostic retention and exact-key redaction apply.
+
 - Trusted hooks send task, turn, event, and transcript identities to the local controller. They do not forward tool inputs or outputs as hook payloads.
 - The controller reads the local Codex rollout to understand lifecycle, usage, and recent visible messages. A bounded source-linked packet sent to Jev can contain user directions, assistant text, and code quoted in those messages. It does not deliberately attach full source files, the full rollout, hidden reasoning, or raw tool bodies. It does not perform general personal-data redaction; do not enable Jevpact for material you cannot send to TypeSafe.
 - Jevpact stores local diagnostic history, including exact redacted Jev request bodies and responses. The default retention is 30 days with a shared 5 GB ceiling. The key itself is removed from those records. `history --stats` exposes retention and dropped-record counts.

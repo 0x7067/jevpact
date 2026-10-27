@@ -16,7 +16,8 @@ export const stateDir = () => process.platform === 'darwin'
     : path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'jevpact');
 // Persistent state survives OS temporary cleanup and plugin upgrades.
 export const historyDir = () => process.env.JEVPACT_HISTORY_DIR || stateDir();
-export const storedKeyPath = () => path.join(stateDir(), 'credential');
+export const storedKeyPath = (provider = process.env.JEV_PROVIDER ?? 'jev') =>
+  path.join(stateDir(), provider === 'openrouter' ? 'openrouter-credential' : 'credential');
 export async function ensureState() {
   const dir = stateDir();
   await mkdir(dir, { mode: 0o700, recursive: true });
