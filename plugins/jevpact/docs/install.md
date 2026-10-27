@@ -54,6 +54,7 @@ node plugins/jevpact/bin/jevpact.js service install --expect-thread NATIVE_TASK_
 | Controller | A versioned JavaScript runtime under `~/Library/Application Support/Jevpact/runtime/`, launched by a per-user LaunchAgent. |
 | Health check | A copied `health-probe.mjs` and state file under `~/Library/Application Support/Jevpact/`, scheduled by a second LaunchAgent. |
 | Credential | `~/Library/Application Support/Jevpact/credential`, readable only by the user. |
+| Controller socket (this fork) | `~/.jevpact/run/controller.sock`, independent of GUI/SSH temporary directory differences. Non-default Codex homes use the same profile suffix as the settings directory. |
 | Diagnostic history | `~/Library/Application Support/Jevpact/`, separate from the plugin cache. |
 
 The plugin cache copy, the controller process, and trusted hooks all matter. `codex plugin add` alone does not start supervision.

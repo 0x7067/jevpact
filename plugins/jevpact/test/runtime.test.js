@@ -6,7 +6,14 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { resolveKey } from '../src/credentials.js';
 import { reduceHook } from '../src/hook.js';
 import { PAUSE_PREFIX } from '../src/controller.js';
-import { storedKeyPath } from '../src/paths.js';
+import { socketPath, storedKeyPath } from '../src/paths.js';
+
+test('SSH, GUI, and service clients find the same socket despite different temp directories', t => {
+  const expected = socketPath();
+  t.mock.method(os, 'tmpdir', () => '/another-session-temp');
+  assert.equal(socketPath(), expected);
+  assert.ok(expected.startsWith(os.homedir() + path.sep));
+});
 
 test('OpenRouter resolves only its own credentials and uses a separate stored file', async () => {
   const env = { JEV_PROVIDER: 'openrouter', OPENROUTER_API_KEY: 'router', JEV_TEST_KEY: 'jev-test', JEV_API_KEY: 'jev-api' };

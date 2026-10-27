@@ -1,6 +1,6 @@
 {
   "name": "jevpact",
-  "version": "0.1.0-dev.2+openrouter.1",
+  "version": "0.1.0-dev.2+openrouter.2",
   "description": "Compact Codex at useful work transitions, then continue safely.",
   "skills": "./skills/",
   "author": {

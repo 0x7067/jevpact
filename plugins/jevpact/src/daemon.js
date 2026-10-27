@@ -7,7 +7,7 @@ import { Codex } from './codex.js';
 import { evaluate } from './jev.js';
 import { decide } from './policy.js';
 import { Controller, PAUSE_PREFIX, RESUME_PREFIX } from './controller.js';
-import { ensureRuntime, ensureState, socketPath, historyDir } from './paths.js';
+import { ensureRuntime, ensureState, socketPath, historyDir, legacyRuntimeDir } from './paths.js';
 import { History } from './history.js';
 import { call } from './rpc.js';
 import { resolveKey } from './credentials.js';
@@ -65,7 +65,7 @@ export async function serve({ apiKey, config = {}, onlyThreads = [], idleMs = 0,
   const attaching = new Map();
   const remember = onlyThreads.length === 0;
   const watchListPath = path.join(remember ? await ensureState() : directory, 'watched-threads.json');
-  const legacyWatchListPath = path.join(directory, 'watched-threads.json');
+  const legacyWatchListPath = path.join(legacyRuntimeDir(), 'watched-threads.json');
   let remembered = new Set();
   let migratedWatchList = false;
   if (remember) {

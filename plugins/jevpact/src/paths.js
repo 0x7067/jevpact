@@ -7,7 +7,10 @@ export const codexHome = () => path.resolve(process.env.CODEX_HOME || path.join(
 const defaultCodexHome = () => path.join(os.homedir(), '.codex');
 export const profileSuffix = () => codexHome() === defaultCodexHome() ? ''
   : `-${createHash('sha256').update(codexHome()).digest('hex').slice(0, 12)}`;
-export const runtimeDir = () => path.join(os.tmpdir(), `jevpact-${process.getuid?.() ?? os.userInfo().username}${profileSuffix()}`);
+// GUI apps, launchd, and SSH shells can have different TMPDIR values.
+// Every client must locate the same user-owned controller socket.
+export const runtimeDir = () => path.join(os.homedir(), `.jevpact${profileSuffix()}`, 'run');
+export const legacyRuntimeDir = () => path.join(os.tmpdir(), `jevpact-${process.getuid?.() ?? os.userInfo().username}${profileSuffix()}`);
 export const socketPath = () => path.join(runtimeDir(), 'controller.sock');
 export const stateDir = () => process.platform === 'darwin'
   ? path.join(os.homedir(), 'Library', 'Application Support', `Jevpact${profileSuffix()}`)
