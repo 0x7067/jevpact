@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
-import { servicePlist } from '../src/service.js';
+import { chooseNode, servicePlist } from '../src/service.js';
 
 const exec = promisify(execFile);
 
@@ -23,4 +23,16 @@ test('controller and health jobs are valid launchd plists with distinct lifecycl
     assert.ok(source.includes(interval == null ? '<key>KeepAlive</key>' : '<key>StartInterval</key><integer>60</integer>'));
     assert.ok(source.includes('<key>Umask</key><integer>63</integer>'));
   }
+});
+
+test('service install keeps the remembered node unless one is requested', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'jp-node-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const shim = path.join(directory, 'node');
+  await writeFile(shim, '#!/bin/sh\n', { mode: 0o755 });
+  const find = async () => '/found/on/path/node';
+  assert.equal(await chooseNode({ requested: '/explicit/node', remembered: shim, find }), '/explicit/node');
+  assert.equal(await chooseNode({ remembered: shim, find }), shim);
+  assert.equal(await chooseNode({ remembered: path.join(directory, 'gone'), find }), '/found/on/path/node');
+  assert.equal(await chooseNode({ find }), '/found/on/path/node');
 });

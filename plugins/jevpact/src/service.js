@@ -124,6 +124,18 @@ async function waitForControllerStop(previousPid) {
   throw new Error('The previous Jevpact controller did not stop');
 }
 
+// An explicit --node wins. Otherwise reuse the path the service was installed
+// with, so an update keeps a stable launcher (a version manager's shim) instead
+// of pinning whichever versioned node comes first on PATH. Fall back to PATH
+// when the remembered binary is gone.
+export async function chooseNode({ requested, remembered, find = findNode } = {}) {
+  if (requested) return requested;
+  if (remembered) {
+    try { await access(remembered, constants.X_OK); return remembered; } catch { /* Removed: search PATH. */ }
+  }
+  return find();
+}
+
 async function findNode() {
   for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {
     if (!directory || !path.isAbsolute(directory)) continue;
@@ -179,7 +191,7 @@ export async function installService({ sourceRoot, expectedThreads, nodePath } =
   if (typeof model !== 'string' || !model.trim()) throw new Error('Jev model must be configured');
   const ids = expectedThreads === undefined ? prior?.expectedThreads ?? [] : [...new Set(expectedThreads)];
   if (ids.some(id => !taskIdPattern.test(id))) throw new Error('Invalid expected task ID');
-  const node = nodePath ?? await findNode();
+  const node = await chooseNode({ requested: nodePath, remembered: prior?.nodePath });
   if (!path.isAbsolute(node)) throw new Error('Node path must be absolute');
   await access(node, constants.X_OK);
   const nodeVersion = (await exec(node, ['--version'], { timeout: 5000 })).stdout.trim().match(/^v(\d+)\.(\d+)\.(\d+)$/);
